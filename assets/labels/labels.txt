@@ -1,0 +1,59 @@
+bắt đầu đường ưu tiên
+cấm đi thẳng
+cấm đỗ
+cấm đường cấm
+cấm ngược chiều
+cấm ô tô
+cấm quay đầu xe
+cấm rẽ
+cấm sử dụng còi xe
+cấm vượt
+cấm dừng, đỗ
+cấm rẽ phải
+cấm rẽ, quay đầu phải
+cấm rẽ, quay đầu trái
+cấm rẽ trái
+chỉ được đi thẳng
+chỉ được rẽ phải
+chỉ được rẽ trái
+chú ý chỗ ngoặt nguy hiểm
+chú ý công trình
+chú ý địa điểm thường xảy ra tai nạn
+chú ý đi chậm
+chú ý đường hai chiều
+chú ý đường giao nhau
+chú ý đường không bằng phẳng
+chú ý đường trơn
+chú ý đường đôi
+chú ý đường hẹp
+chú ý giao đường khuất tầm nhìn
+chú ý giao đường ưu tiên
+chú ý hầm chui
+chú ý hết đường đôi
+chú ý người đi bộ
+chú ý tín hiệu đèn
+chú ý trẻ em
+hạn chế chiều cao 4.3m
+hết lệnh cấm
+hướng phải đi tránh vật cản
+kết thúc đường ưu tiên
+khu vực đông dân cư
+tốc độ tối đa 100 km/h
+tốc độ tối đa 120 km/h
+tốc độ tối đa 20 km/h
+tốc độ tối đa 30 km/h
+tốc độ tối đa 40 km/h
+tốc độ tối đa 50 km/h
+tốc độ tối đa 60 km/h
+tốc độ tối đa 70 km/h
+tốc độ tối đa 80 km/h
+tốc độ tối đa 90 km/h
+tốc độ tối thiểu 50 km/h
+tốc độ tối thiểu 60 km/h
+tốc độ tối thiểu 80 km/h
+ngoài khu vực đông dân cư
+hết tốc độ tối đa 40 km/h
+hết tốc độ tối đa 50 km/h
+hết tốc độ tối đa 60 km/h
+dừng lại
+vòng xuyến

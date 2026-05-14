@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "796107536606",
+    "project_id": "sentinel-ai-b575e",
+    "storage_bucket": "sentinel-ai-b575e.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:796107536606:android:a926ee19e2dbe1cf5a6a4f",
+        "android_client_info": {
+          "package_name": "com.example.traffic_detect"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDCDXBOAZnMbJhRMbiPkkSH9PBMofYzK3o"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

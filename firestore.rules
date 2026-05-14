@@ -1,0 +1,52 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Helper function: check if request is authenticated
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // Helper function: validate report data structure
+    function isValidReport() {
+      let data = request.resource.data;
+      return data.size() <= 10 &&
+        'latitude' in data && data.latitude is number &&
+        'longitude' in data && data.longitude is number &&
+        'violationType' in data && data.violationType is string &&
+        'description' in data && data.description is string &&
+        'reportedBy' in data && data.reportedBy is string &&
+        'timestamp' in data && data.timestamp is timestamp &&
+        'upvotes' in data && data.upvotes is number &&
+        'isVerified' in data && data.isVerified is bool &&
+        data.upvotes >= 0 &&
+        data.violationType in ['speeding', 'accident', 'obstacle', 'police', 'construction', 'flooding'];
+    }
+
+    // Community Reports Collection
+    match /community_reports/{reportId} {
+      // Allow public read (anyone can view reports)
+      allow read: if true;
+
+      // Allow create only if authenticated and data is valid
+      allow create: if isAuthenticated() && isValidReport() &&
+        request.resource.data.reportedBy == request.auth.uid;
+
+      // Allow update only for upvote increment (update upvotes field)
+      allow update: if isAuthenticated() &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['upvotes']) &&
+        request.resource.data.upvotes == resource.data.upvotes + 1;
+
+      // Allow delete only by creator or admin (verify via custom claims if needed)
+      allow delete: if isAuthenticated() &&
+        resource.data.reportedBy == request.auth.uid;
+
+      // Prevent batch operations on this collection
+      // (Firestore will automatically block batch deletes/updates via rules)
+    }
+
+    // Default deny all other collections
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
