@@ -1,18 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 
-import 'screens/ar_detection_screen.dart';
-import 'screens/map_warning_screen.dart';
-import 'screens/community_report_screen.dart';
-import 'screens/stats_history_screen.dart';
-import 'providers/navigation_provider.dart';
-import 'providers/app_shell_provider.dart';
+import 'screens/login_screen.dart';
+import 'screens/register_screen.dart';
 import 'theme/app_colors.dart';
+import 'package:firebase_core/firebase_core.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  
+  await Firebase.initializeApp();
 
   SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
   SystemChrome.setSystemUIOverlayStyle(
@@ -31,17 +29,13 @@ class SentinelApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MultiProvider(
-      providers: [
-        ChangeNotifierProvider(create: (_) => AppShellProvider()),
-        ChangeNotifierProvider(create: (_) => NavigationProvider()),
-      ],
-      child: MaterialApp(
-        title: 'SENTINEL AI',
-        debugShowCheckedModeBanner: false,
-        theme: _buildTheme(),
-        home: const MainShell(),
-      ),
+    return MaterialApp(
+      title: 'SENTINEL AI',
+      debugShowCheckedModeBanner: false,
+      theme: _buildTheme(),
+      home: HistoryScreen(),
+      // home: const LoginScreen(),
+
     );
   }
 
@@ -70,7 +64,7 @@ class SentinelApp extends StatelessWidget {
         onSurface: AppColors.onSurface,
         onSurfaceVariant: AppColors.onSurfaceVariant,
       ),
-      textTheme: GoogleFonts.interTextTheme(base.textTheme),
+      textTheme: base.textTheme,
       appBarTheme: AppBarTheme(
         backgroundColor: AppColors.surfaceContainer.withOpacity(0.85),
         elevation: 0,
@@ -98,135 +92,3 @@ class SentinelApp extends StatelessWidget {
   }
 }
 
-class MainShell extends StatefulWidget {
-  const MainShell({super.key});
-
-  @override
-  State<MainShell> createState() => _MainShellState();
-}
-
-class _MainShellState extends State<MainShell> {
-  final List<Widget> _screens = const [
-    MapWarningScreen(),
-    ARDetectionScreen(),
-    CommunityReportScreen(),
-    StatsHistoryScreen(),
-  ];
-
-  static const _navItems = [
-    _NavItem(Icons.dashboard_outlined, Icons.dashboard, 'HUD'),
-    _NavItem(Icons.visibility_outlined, Icons.visibility, 'AR Scan'),
-    _NavItem(Icons.emergency_share_outlined, Icons.emergency_share, 'Report'),
-    _NavItem(Icons.insights_outlined, Icons.insights, 'Stats'),
-  ];
-
-  @override
-  Widget build(BuildContext context) {
-    final currentIndex = context.watch<AppShellProvider>().currentIndex;
-
-    return Scaffold(
-      extendBody: true,
-      body: IndexedStack(index: currentIndex, children: _screens),
-      bottomNavigationBar: _SentinelBottomNav(
-        currentIndex: currentIndex,
-        items: _navItems,
-        onTap: (i) => context.read<AppShellProvider>().setIndex(i),
-      ),
-    );
-  }
-}
-
-class _NavItem {
-  final IconData icon;
-  final IconData activeIcon;
-  final String label;
-  const _NavItem(this.icon, this.activeIcon, this.label);
-}
-
-class _SentinelBottomNav extends StatelessWidget {
-  final int currentIndex;
-  final List<_NavItem> items;
-  final ValueChanged<int> onTap;
-
-  const _SentinelBottomNav({
-    required this.currentIndex,
-    required this.items,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      decoration: BoxDecoration(
-        color: AppColors.surfaceContainer.withOpacity(0.92),
-        border: Border(
-          top: BorderSide(color: Colors.white.withOpacity(0.08), width: 1),
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.5),
-            blurRadius: 24,
-            offset: const Offset(0, -4),
-          ),
-        ],
-      ),
-      child: SafeArea(
-        top: false,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceAround,
-            children: items.asMap().entries.map((e) {
-              final idx = e.key;
-              final item = e.value;
-              final active = currentIndex == idx;
-              return GestureDetector(
-                onTap: () => onTap(idx),
-                behavior: HitTestBehavior.opaque,
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 250),
-                  curve: Curves.easeInOut,
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 18,
-                    vertical: 8,
-                  ),
-                  decoration: BoxDecoration(
-                    color: active
-                        ? AppColors.primaryContainer.withOpacity(0.18)
-                        : Colors.transparent,
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(
-                        active ? item.activeIcon : item.icon,
-                        color: active
-                            ? AppColors.primary
-                            : AppColors.onSurfaceVariant.withOpacity(0.5),
-                        size: 22,
-                      ),
-                      const SizedBox(height: 3),
-                      Text(
-                        item.label,
-                        style: GoogleFonts.inter(
-                          fontSize: 11,
-                          fontWeight: active
-                              ? FontWeight.w600
-                              : FontWeight.w400,
-                          color: active
-                              ? AppColors.primary
-                              : AppColors.onSurfaceVariant.withOpacity(0.5),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              );
-            }).toList(),
-          ),
-        ),
-      ),
-    );
-  }
-}

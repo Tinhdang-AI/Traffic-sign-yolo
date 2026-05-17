@@ -35,8 +35,7 @@ class DetectionService {
 
     try {
       // 1. Load labels từ assets/labels/labels.txt
-      final labelData =
-          await rootBundle.loadString('assets/labels/labels.txt');
+      final labelData = await rootBundle.loadString('assets/labels/labels.txt');
       _labels = labelData
           .split('\n')
           .map((l) => l.trim())
@@ -53,9 +52,11 @@ class DetectionService {
       _isInitialized = true;
       print('[DetectionService] ✅ Model loaded: ${_labels.length} labels');
       print(
-          '[DetectionService] Input shape: ${_interpreter!.getInputTensor(0).shape}');
+        '[DetectionService] Input shape: ${_interpreter!.getInputTensor(0).shape}',
+      );
       print(
-          '[DetectionService] Output shape: ${_interpreter!.getOutputTensor(0).shape}');
+        '[DetectionService] Output shape: ${_interpreter!.getOutputTensor(0).shape}',
+      );
     } catch (e) {
       _isInitialized = false;
       print('[DetectionService] ❌ Failed to initialize: $e');
@@ -76,11 +77,13 @@ class DetectionService {
 
     try {
       // Chạy trong compute isolate để không block UI thread
-      return await Isolate.run(() => _runInference(
-            imageBytes: imageBytes,
-            labels: _labels,
-            interpreter: _interpreter!,
-          ));
+      return await Isolate.run(
+        () => _runInference(
+          imageBytes: imageBytes,
+          labels: _labels,
+          interpreter: _interpreter!,
+        ),
+      );
     } catch (e) {
       print('[DetectionService] ❌ Inference error: $e');
       return [];
@@ -101,11 +104,7 @@ class DetectionService {
     if (image == null) return [];
 
     // 2. Resize về kích thước input của model
-    final resized = img.copyResize(
-      image,
-      width: inputSize,
-      height: inputSize,
-    );
+    final resized = img.copyResize(image, width: inputSize, height: inputSize);
 
     // 3. Chuẩn hóa pixel về [0.0, 1.0] và đưa vào tensor Float32
     final inputTensor = _imageToFloat32(resized);
@@ -114,8 +113,13 @@ class DetectionService {
     // YOLOv8 output: [1, num_classes+4, num_detections]
     // Lấy shape từ model thực tế
     final outputShape = interpreter.getOutputTensor(0).shape;
-    final outputTensor =
-        List.generate(outputShape[0], (_) => List.generate(outputShape[1], (_) => List.filled(outputShape[2], 0.0)));
+    final outputTensor = List.generate(
+      outputShape[0],
+      (_) => List.generate(
+        outputShape[1],
+        (_) => List.filled(outputShape[2], 0.0),
+      ),
+    );
 
     // 5. Chạy inference
     interpreter.run(inputTensor, outputTensor);
@@ -138,13 +142,9 @@ class DetectionService {
       List.generate(inputSize, (y) {
         return List.generate(inputSize, (x) {
           final pixel = image.getPixel(x, y);
-          return [
-            pixel.r / 255.0,
-            pixel.g / 255.0,
-            pixel.b / 255.0,
-          ];
+          return [pixel.r / 255.0, pixel.g / 255.0, pixel.b / 255.0];
         });
-      })
+      }),
     ];
   }
 
@@ -162,8 +162,8 @@ class DetectionService {
     // output shape: [4 + numClasses, numBoxes]
     final modelClassCount = math.max(0, output.length - 4);
     final numClasses = labels.isEmpty
-      ? modelClassCount
-      : math.min(labels.length, modelClassCount);
+        ? modelClassCount
+        : math.min(labels.length, modelClassCount);
     final numBoxes = output[0].length;
 
     for (int b = 0; b < numBoxes; b++) {
@@ -195,12 +195,14 @@ class DetectionService {
           ? labels[classIdx]
           : 'CLASS_$classIdx';
 
-      results.add(DetectionResult(
-        label: label,
-        confidence: maxConf,
-        boundingBox: Rect.fromLTRB(left, top, right, bottom),
-        timestamp: now,
-      ));
+      results.add(
+        DetectionResult(
+          label: label,
+          confidence: maxConf,
+          boundingBox: Rect.fromLTRB(left, top, right, bottom),
+          timestamp: now,
+        ),
+      );
     }
 
     return results;

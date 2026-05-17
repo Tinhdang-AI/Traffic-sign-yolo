@@ -1,0 +1,11 @@
+name: google_fonts
+version: 4.0.4
+description: Local shim for google_fonts used by traffic_detect.
+publish_to: none
+
+environment:
+  sdk: ^3.10.4
+
+dependencies:
+  flutter:
+    sdk: flutter
