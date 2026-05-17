@@ -43,8 +43,8 @@ class _VoiceSettingsScreenState extends State<VoiceSettingsScreen>
 
   final _languages = [
     _LangOption('vi-VN', '🇻🇳', 'Tiếng Việt'),
-    _LangOption('en-US', '🇺🇸', 'English (US)'),
-    _LangOption('zh-CN', '🇨🇳', '中文'),
+    // _LangOption('en-US', '🇺🇸', 'English (US)'),
+    // _LangOption('zh-CN', '🇨🇳', '中文'),
   ];
 
   @override

@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 
 import 'screens/login_screen.dart';
 import 'screens/register_screen.dart';
+import 'screens/main_shell.dart';
 import 'theme/app_colors.dart';
 import 'package:firebase_core/firebase_core.dart';
 
@@ -33,9 +34,7 @@ class SentinelApp extends StatelessWidget {
       title: 'SENTINEL AI',
       debugShowCheckedModeBanner: false,
       theme: _buildTheme(),
-      home: HistoryScreen(),
-      // home: const LoginScreen(),
-
+      home: const MainShell(),
     );
   }
 

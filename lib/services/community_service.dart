@@ -14,7 +14,7 @@
 //   CommunityService._internal();
 
 //   /// Create and submit a community report.
-//   /// Saves locally so the app works without Firebase.
+//   /// Saves locally so the app works without a remote backend.
 //   Future<String> createReport({
 //     required double latitude,
 //     required double longitude,
