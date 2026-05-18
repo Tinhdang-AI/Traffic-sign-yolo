@@ -1,8 +1,10 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 
+import 'admin_dashboard/admin_dashboard_screen.dart';
 import 'screens/ar_detection_screen.dart';
 import 'screens/map_warning_screen.dart';
 import 'screens/community_report_screen.dart';
@@ -40,7 +42,7 @@ class SentinelApp extends StatelessWidget {
         title: 'SENTINEL AI',
         debugShowCheckedModeBanner: false,
         theme: _buildTheme(),
-        home: const MainShell(),
+        home: kIsWeb ? const AdminDashboardScreen() : const MainShell(),
       ),
     );
   }
