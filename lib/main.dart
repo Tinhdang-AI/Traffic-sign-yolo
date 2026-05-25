@@ -48,15 +48,74 @@ class SentinelApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'SENTINEL AI',
-      debugShowCheckedModeBanner: false,
-      theme: _buildTheme(),
-      home: const MainShell(),
+    return Consumer<SettingsProvider>(
+      builder: (context, settings, child) {
+        return MaterialApp(
+          title: 'SENTINEL TRAFFIC',
+          debugShowCheckedModeBanner: false,
+          themeMode: settings.darkMode ? ThemeMode.dark : ThemeMode.light,
+          theme: _buildLightTheme(),
+          darkTheme: _buildDarkTheme(),
+          home: const MainShell(),
+        );
+      },
     );
   }
 
-  ThemeData _buildTheme() {
+  ThemeData _buildLightTheme() {
+    final base = ThemeData.light(useMaterial3: true);
+    return base.copyWith(
+      scaffoldBackgroundColor: const Color(0xFFF8F9FA),
+      colorScheme: const ColorScheme.light(
+        background: Color(0xFFF8F9FA),
+        surface: Colors.white,
+        surfaceVariant: Color(0xFFE9ECEF),
+        primary: AppColors.primaryContainer, // Blue
+        primaryContainer: AppColors.primary,
+        onPrimary: Colors.white,
+        onPrimaryContainer: AppColors.onPrimaryContainer,
+        secondary: AppColors.secondaryContainer,
+        secondaryContainer: AppColors.secondary,
+        onSecondary: Colors.white,
+        tertiary: AppColors.tertiaryContainer,
+        tertiaryContainer: AppColors.tertiary,
+        onTertiary: Colors.white,
+        error: AppColors.errorContainer,
+        errorContainer: AppColors.error,
+        outline: AppColors.outline,
+        outlineVariant: AppColors.outlineVariant,
+        onSurface: Color(0xFF212529),
+        onSurfaceVariant: Color(0xFF495057),
+      ),
+      appBarTheme: const AppBarTheme(
+        backgroundColor: Colors.white,
+        elevation: 0,
+        surfaceTintColor: Colors.transparent,
+        systemOverlayStyle: SystemUiOverlayStyle.dark,
+        iconTheme: IconThemeData(color: Color(0xFF212529)),
+        titleTextStyle: TextStyle(color: Color(0xFF212529), fontSize: 20, fontWeight: FontWeight.w600),
+      ),
+      switchTheme: SwitchThemeData(
+        thumbColor: MaterialStateProperty.resolveWith(
+          (s) => s.contains(MaterialState.selected)
+              ? Colors.white
+              : AppColors.outline,
+        ),
+        trackColor: MaterialStateProperty.resolveWith(
+          (s) => s.contains(MaterialState.selected)
+              ? AppColors.primaryContainer
+              : const Color(0xFFE9ECEF),
+        ),
+      ),
+      sliderTheme: const SliderThemeData(
+        activeTrackColor: AppColors.primaryContainer,
+        thumbColor: AppColors.primaryContainer,
+        inactiveTrackColor: Color(0xFFE9ECEF),
+      ),
+    );
+  }
+
+  ThemeData _buildDarkTheme() {
     final base = ThemeData.dark(useMaterial3: true);
     return base.copyWith(
       scaffoldBackgroundColor: AppColors.background,

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:isolate';
 import 'dart:math' as math;
 
@@ -86,9 +87,22 @@ class DetectionService {
       print('[DetectionService] Labels: ${_labels.length}');
 
       // 2. Load interpreter on MAIN isolate — it will share its address with worker
+      final options = InterpreterOptions()..threads = 4;
+      if (Platform.isAndroid) {
+        try {
+          options.addDelegate(XNNPackDelegate());
+        } catch (_) {
+          // fallback
+        }
+      } else if (Platform.isIOS) {
+        try {
+          options.addDelegate(GpuDelegate());
+        } catch (_) {}
+      }
+
       _interpreter = await Interpreter.fromAsset(
         'assets/models/best.tflite',
-        options: InterpreterOptions()..threads = 2,
+        options: options,
       );
 
       // 3. Read exact shapes & dtypes from model

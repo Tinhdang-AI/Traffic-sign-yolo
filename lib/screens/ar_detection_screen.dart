@@ -14,6 +14,11 @@ import '../models/detection_result.dart';
 import '../widgets/traffic_sign_icon.dart';
 import '../widgets/confidence_badge.dart';
 import '../services/database_service.dart';
+import '../core/utils/sign_translator.dart';
+import '../services/traffic_rule_engine.dart';
+import '../services/hybrid_speed_limit_service.dart';
+import 'package:provider/provider.dart';
+import '../controllers/settings_provider.dart';
 
 class ARDetectionScreen extends StatefulWidget {
   const ARDetectionScreen({super.key});
@@ -28,7 +33,7 @@ class _ARDetectionScreenState extends State<ARDetectionScreen>
   late final AnimationController _waveCtrl;
   late final Animation<double> _pulse;
 
-  static const int _stableFrameThreshold = 1;
+  static const int _stableFrameThreshold = 0;
   static const double _stableConfidenceThreshold = 0.65;
   static const double _confidenceSmoothingFactor = 0.50;
 
@@ -44,10 +49,12 @@ class _ARDetectionScreenState extends State<ARDetectionScreen>
   final Map<String, double> _smoothedConfidence = {};
 
   // Voice Guidance switch
-  bool _voiceEnabled = true;
+  bool _isTtsEnabled = true;
 
   // Continuous Scan switch
   bool _isScanContinuous = true;
+
+  StreamSubscription<int?>? _hybridSubscription;
 
   String? _activeSpeedLimit;
 
@@ -81,6 +88,15 @@ class _ARDetectionScreenState extends State<ARDetectionScreen>
   }
 
   Future<void> _initParams() async {
+    HybridSpeedLimitService.instance.initialize();
+    _hybridSubscription = HybridSpeedLimitService.instance.hybridSpeedStream.listen((speed) {
+      if (mounted) {
+        setState(() {
+          _activeSpeedLimit = speed?.toString();
+        });
+      }
+    });
+
     await _initLocation();
     await _initCameraAndModel();
   }
@@ -114,6 +130,7 @@ class _ARDetectionScreenState extends State<ARDetectionScreen>
             _currentSpeed = LocationService.instance.currentSpeedKmH;
           });
         }
+        HybridSpeedLimitService.instance.updateLocation(position);
       });
     }
   }
@@ -141,18 +158,16 @@ class _ARDetectionScreenState extends State<ARDetectionScreen>
       if (!mounted) return;
       setState(() {});
 
-      // Periodically process camera frames.
-      // 200ms (~5fps) is safe for Samsung A02 (ARM 32-bit) — takePicture()
-      // alone takes 100-300ms, so 50ms would cause queued requests to pile up.
-      _detectionTimer = Timer.periodic(const Duration(milliseconds: 200), (_) {
-        _processFrame();
+      // Use startImageStream instead of takePicture() + Timer to avoid disk I/O delay
+      await _cameraController!.startImageStream((CameraImage image) {
+        _processFrameFromStream(image);
       });
     } catch (e) {
       print('🎤 [Camera/Model] Init Error: $e');
     }
   }
 
-  Future<void> _processFrame() async {
+  Future<void> _processFrameFromStream(CameraImage image) async {
     if (!_isScanContinuous ||
         _isProcessing ||
         _cameraController == null ||
@@ -162,13 +177,8 @@ class _ARDetectionScreenState extends State<ARDetectionScreen>
 
     _isProcessing = true;
     try {
-      final file = await _cameraController!.takePicture();
-      final bytes = await file.readAsBytes();
-
-      // Delete temp picture file immediately to save disk space
-      try {
-        File(file.path).deleteSync();
-      } catch (_) {}
+      // Extract JPEG bytes from stream (since ImageFormatGroup.jpeg is used)
+      final bytes = image.planes[0].bytes;
 
       final results = await DetectionService.instance.detect(bytes);
       if (mounted) {
@@ -178,9 +188,9 @@ class _ARDetectionScreenState extends State<ARDetectionScreen>
         });
 
         if (stabilized.isNotEmpty) {
-          // 1. Update speed limit based on all detected signs
+          // 1. Update speed limit based on all detected signs via Rule Engine
           for (final d in stabilized) {
-            _updateSpeedLimit(d.label);
+            TrafficRuleEngine.instance.processDetection(d.label);
           }
 
           // 2. Speak all new stable warnings
@@ -198,41 +208,24 @@ class _ARDetectionScreenState extends State<ARDetectionScreen>
     }
   }
 
-  void _updateSpeedLimit(String label) {
-    final l = label.toLowerCase();
-    if (l.contains('tốc độ tối đa')) {
-      final matches = RegExp(r'\d+').allMatches(l);
-      if (matches.isNotEmpty) {
-        setState(() {
-          _activeSpeedLimit = matches.first.group(0);
-        });
-      }
-    } else if (l.contains('hết tốc độ tối đa') ||
-        l.contains('hết lệnh cấm') ||
-        l.contains('ngoài khu vực đông dân cư')) {
-      setState(() {
-        _activeSpeedLimit = null;
-      });
-    }
-  }
-
   void _speakDetectedSigns(List<String> labels) {
-    if (!_voiceEnabled) return;
+    if (!_isTtsEnabled) return;
 
     final now = DateTime.now();
-    final List<String> signsToSpeak = [];
+    final signsToSpeak = <String>[];
+    final isEn = context.read<SettingsProvider>().isEnglish;
 
     for (final label in labels) {
       final lastSpoken = _spokenSignsCooldown[label];
-      if (lastSpoken == null || now.difference(lastSpoken) > const Duration(seconds: 15)) {
+      if (lastSpoken == null || now.difference(lastSpoken) > const Duration(minutes: 5)) {
         _spokenSignsCooldown[label] = now;
         signsToSpeak.add(label);
       }
     }
 
     if (signsToSpeak.isNotEmpty) {
-      final announcement = signsToSpeak.join(' và ');
-      VoiceGuidanceService().speakTrafficSign(announcement);
+      final spokenText = signsToSpeak.map((l) => SignTranslator.translate(l, isEn)).join(isEn ? ' and ' : ' và ');
+      VoiceGuidanceService().speakTrafficSign(spokenText, isEn: isEn);
     }
   }
 
@@ -310,7 +303,7 @@ class _ARDetectionScreenState extends State<ARDetectionScreen>
 
     for (final d in detections) {
       final lastSaved = _lastSavedHistory[d.label];
-      if (lastSaved == null || now.difference(lastSaved) > const Duration(seconds: 15)) {
+      if (lastSaved == null || now.difference(lastSaved) > const Duration(minutes: 5)) {
         _lastSavedHistory[d.label] = now;
         
         await DatabaseService().addDetectionHistory(
@@ -378,7 +371,8 @@ class _ARDetectionScreenState extends State<ARDetectionScreen>
 
   @override
   void dispose() {
-    _detectionTimer?.cancel();
+    _hybridSubscription?.cancel();
+    HybridSpeedLimitService.instance.dispose();
     _positionSubscription?.cancel();
     LocationService.instance.stopTracking();
     _cameraController?.dispose();
@@ -391,6 +385,7 @@ class _ARDetectionScreenState extends State<ARDetectionScreen>
   Widget build(BuildContext context) {
     final size = MediaQuery.of(context).size;
     final top = MediaQuery.of(context).padding.top;
+    final isEn = context.watch<SettingsProvider>().isEnglish;
 
     return Scaffold(
       backgroundColor: Colors.black,
@@ -427,7 +422,7 @@ class _ARDetectionScreenState extends State<ARDetectionScreen>
                       ),
                       const SizedBox(height: 16),
                       Text(
-                        'ĐANG KHỞI TẠO HỆ THỐNG...',
+                        isEn ? 'INITIALIZING SYSTEM...' : 'ĐANG KHỞI TẠO HỆ THỐNG...',
                         style: GoogleFonts.inter(
                           fontSize: 11,
                           fontWeight: FontWeight.w700,
@@ -443,18 +438,20 @@ class _ARDetectionScreenState extends State<ARDetectionScreen>
 
           // AR scanning corners and target crosshair
           Positioned.fill(
-            child: CustomPaint(
-              painter: _ScanningOverlayPainter(
-                pulseValue: _isScanContinuous ? _pulse.value : 0.5,
-                isScanning: _isScanContinuous,
+              child: CustomPaint(
+                painter: _ScanningOverlayPainter(
+                  pulseValue: _isScanContinuous ? _pulse.value : 0.5,
+                  isScanning: _isScanContinuous,
+                ),
               ),
             ),
-          ),
 
           // 2. Dynamic Target bounding boxes
           if (_isScanContinuous) ..._detections.map((d) {
             final left = d.left * size.width;
             final topBox = d.top * size.height;
+            final boxWidth = d.width * size.width;
+            final boxHeight = d.height * size.height;
             return Positioned(
               left: left,
               top: topBox,
@@ -464,12 +461,15 @@ class _ARDetectionScreenState extends State<ARDetectionScreen>
                 borderColor: AppColors.primary,
                 glowColor: AppColors.primary,
                 alpha: _pulse.value,
+                isEn: isEn,
+                width: boxWidth,
+                height: boxHeight,
               ),
             );
           }),
 
           // 3. Floating Header (Title & GPS status)
-          _buildHeader(top),
+          _buildHeader(top, isEn),
 
           // 4. Warning alerts at top center (displays all stabilized warnings)
           if (_isScanContinuous && _detections.isNotEmpty)
@@ -509,7 +509,7 @@ class _ARDetectionScreenState extends State<ARDetectionScreen>
               child: ElevatedButton.icon(
                 onPressed: () => _reportDetection(_detections.first),
                 icon: Icon(Icons.send, size: 18),
-                label: Text('Báo cáo'),
+                label: Text(isEn ? 'Report' : 'Báo cáo'),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: Colors.red.shade600,
                   foregroundColor: Colors.white,
@@ -522,33 +522,24 @@ class _ARDetectionScreenState extends State<ARDetectionScreen>
           Positioned(
             right: 16,
             bottom: 120,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                _ToggleHUD(
-                  title: 'QUÉT LIÊN TỤC',
-                  enabled: _isScanContinuous,
-                  onChanged: (val) {
-                    setState(() {
-                      _isScanContinuous = val;
-                      if (!val) {
-                        _detections.clear(); // Clear boxes when paused
-                      }
-                    });
-                  },
-                ),
-                const SizedBox(height: 12),
-                _ToggleHUD(
-                  title: 'ĐỌC BIỂN BÁO',
-                  enabled: _voiceEnabled,
-                  onChanged: (val) {
-                    setState(() {
-                      _voiceEnabled = val;
-                    });
-                  },
-                ),
-              ],
+            child: _QuickControlsHUD(
+              isScanContinuous: _isScanContinuous,
+              onScanChanged: (val) {
+                setState(() {
+                  _isScanContinuous = val;
+                  if (!val) {
+                    _detections.clear(); // Clear boxes when paused
+                    _labelStreak.clear();
+                    _smoothedConfidence.clear();
+                  }
+                });
+              },
+              voiceEnabled: _isTtsEnabled,
+              onVoiceChanged: (val) {
+                setState(() {
+                  _isTtsEnabled = val;
+                });
+              },
             ),
           ),
 
@@ -572,7 +563,7 @@ class _ARDetectionScreenState extends State<ARDetectionScreen>
     );
   }
 
-  Widget _buildHeader(double top) {
+  Widget _buildHeader(double top, bool isEn) {
     return Positioned(
       top: 0,
       left: 0,
@@ -623,7 +614,7 @@ class _ARDetectionScreenState extends State<ARDetectionScreen>
                   ),
                   const SizedBox(width: 6),
                   Text(
-                    'GPS TRUY CẬP',
+                    isEn ? 'GPS ACQUIRED' : 'GPS TRUY CẬP',
                     style: GoogleFonts.inter(
                       fontSize: 8,
                       fontWeight: FontWeight.w800,
@@ -676,6 +667,7 @@ class _SpeedHUD extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isEn = context.watch<SettingsProvider>().isEnglish;
     final double? limitVal = speedLimit != null ? double.tryParse(speedLimit!) : null;
     final String diffStr = (limitVal != null)
         ? (speed - limitVal > 0 ? '+${(speed - limitVal).toInt()}' : '${(speed - limitVal).toInt()}')
@@ -692,7 +684,7 @@ class _SpeedHUD extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             Text(
-              'TỐC ĐỘ',
+              isEn ? 'SPEED' : 'TỐC ĐỘ',
               style: GoogleFonts.inter(
                 fontSize: 8.5,
                 fontWeight: FontWeight.w800,
@@ -728,7 +720,7 @@ class _SpeedHUD extends StatelessWidget {
                   child: Column(
                     children: [
                       Text(
-                        'Giới hạn',
+                        isEn ? 'Limit' : 'Giới hạn',
                         style: GoogleFonts.inter(
                           fontSize: 8,
                           color: Colors.white38,
@@ -756,7 +748,7 @@ class _SpeedHUD extends StatelessWidget {
                   child: Column(
                     children: [
                       Text(
-                        'Chênh',
+                        isEn ? 'Diff' : 'Chênh',
                         style: GoogleFonts.inter(
                           fontSize: 8,
                           color: Colors.white38,
@@ -784,62 +776,81 @@ class _SpeedHUD extends StatelessWidget {
   }
 }
 
-class _ToggleHUD extends StatelessWidget {
-  final String title;
-  final bool enabled;
-  final ValueChanged<bool> onChanged;
-  const _ToggleHUD({
-    required this.title,
-    required this.enabled,
-    required this.onChanged,
+class _QuickControlsHUD extends StatelessWidget {
+  final bool isScanContinuous;
+  final ValueChanged<bool> onScanChanged;
+  final bool voiceEnabled;
+  final ValueChanged<bool> onVoiceChanged;
+  const _QuickControlsHUD({
+    required this.isScanContinuous,
+    required this.onScanChanged,
+    required this.voiceEnabled,
+    required this.onVoiceChanged,
   });
 
   @override
   Widget build(BuildContext context) {
+    final isEn = context.watch<SettingsProvider>().isEnglish;
     return _GlassCard(
-      child: SizedBox(
-        width: 112,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _buildIconToggle(
+            icon: Icons.document_scanner_outlined,
+            label: isEn ? 'AR SCAN' : 'QUÉT AR',
+            value: isScanContinuous,
+            onChanged: onScanChanged,
+          ),
+          const SizedBox(height: 16),
+          _buildIconToggle(
+            icon: Icons.volume_up_outlined,
+            label: isEn ? 'READ SIGN' : 'ĐỌC BIỂN',
+            value: voiceEnabled,
+            onChanged: onVoiceChanged,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildIconToggle({
+    required IconData icon,
+    required String label,
+    required bool value,
+    required ValueChanged<bool> onChanged,
+  }) {
+    return GestureDetector(
+      onTap: () => onChanged(!value),
+      behavior: HitTestBehavior.opaque,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        width: 56,
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        decoration: BoxDecoration(
+          color: value ? AppColors.primary.withOpacity(0.15) : Colors.transparent,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: value ? AppColors.primary.withOpacity(0.4) : Colors.transparent,
+            width: 1,
+          ),
+        ),
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
           children: [
+            Icon(
+              icon,
+              color: value ? AppColors.primary : Colors.white54,
+              size: 24,
+            ),
+            const SizedBox(height: 4),
             Text(
-              title,
+              label,
               style: GoogleFonts.inter(
                 fontSize: 8,
                 fontWeight: FontWeight.w800,
-                letterSpacing: 1.0,
-                color: Colors.white54,
+                color: value ? AppColors.primary : Colors.white54,
               ),
-            ),
-            const SizedBox(height: 6),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(
-                  enabled ? 'Bật' : 'Tắt',
-                  style: GoogleFonts.inter(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w800,
-                    color: Colors.white,
-                  ),
-                ),
-                SizedBox(
-                  width: 38,
-                  height: 20,
-                  child: FittedBox(
-                    fit: BoxFit.contain,
-                    child: Switch(
-                      value: enabled,
-                      onChanged: onChanged,
-                      activeThumbColor: AppColors.primary,
-                      activeTrackColor: AppColors.primary.withOpacity(0.3),
-                      inactiveThumbColor: Colors.white54,
-                      inactiveTrackColor: Colors.white10,
-                    ),
-                  ),
-                ),
-              ],
+              textAlign: TextAlign.center,
             ),
           ],
         ),
@@ -855,6 +866,7 @@ class _VoiceWave extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isEn = context.watch<SettingsProvider>().isEnglish;
     final heights = [12.0, 24.0, 36.0, 48.0, 36.0, 24.0, 12.0];
     final opacs = [0.25, 0.45, 0.65, 1.0, 0.65, 0.45, 0.25];
     return Column(
@@ -868,7 +880,9 @@ class _VoiceWave extends StatelessWidget {
             border: Border.all(color: Colors.white.withOpacity(0.06)),
           ),
           child: Text(
-            isScanning ? '"Đang quét các mối nguy hiểm..."' : '"Đã tạm dừng quét"',
+            isScanning 
+              ? (isEn ? '"Scanning for hazards..."' : '"Đang quét các mối nguy hiểm..."')
+              : (isEn ? '"Scanning paused"' : '"Đã tạm dừng quét"'),
             style: GoogleFonts.inter(
               fontSize: 9.5,
               fontWeight: FontWeight.w700,
@@ -914,6 +928,9 @@ class _DetectionBox extends StatelessWidget {
   final String label, conf;
   final Color borderColor, glowColor;
   final double alpha;
+  final bool isEn;
+  final double width;
+  final double height;
 
   const _DetectionBox({
     required this.label,
@@ -921,49 +938,67 @@ class _DetectionBox extends StatelessWidget {
     required this.borderColor,
     required this.glowColor,
     required this.alpha,
+    this.isEn = false,
+    required this.width,
+    required this.height,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: 95,
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
-      decoration: BoxDecoration(
-        border: Border.all(color: borderColor.withOpacity(alpha), width: 2),
-        color: borderColor.withOpacity(0.08),
-        boxShadow: [
-          BoxShadow(
-            color: glowColor.withOpacity(alpha * 0.4),
-            blurRadius: 8,
-          ),
-        ],
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        mainAxisAlignment: MainAxisAlignment.center,
+    return SizedBox(
+      width: width,
+      height: height,
+      child: Stack(
+        clipBehavior: Clip.none,
         children: [
-          Text(
-            label.toUpperCase(),
-            textAlign: TextAlign.center,
-            style: GoogleFonts.inter(
-              fontSize: 8,
-              fontWeight: FontWeight.w900,
-              color: Colors.white,
-              height: 1.15,
+          // Bounding box viền
+          Container(
+            decoration: BoxDecoration(
+              border: Border.all(color: borderColor.withOpacity(alpha), width: 3),
+              color: borderColor.withOpacity(0.15),
+              boxShadow: [
+                BoxShadow(
+                  color: glowColor.withOpacity(alpha * 0.4),
+                  blurRadius: 8,
+                ),
+              ],
+              borderRadius: BorderRadius.circular(8),
             ),
           ),
-          const SizedBox(height: 6),
-          TrafficSignIcon(
-            label: label,
-            size: 24,
-          ),
-          const SizedBox(height: 4),
-          Text(
-            conf,
-            style: GoogleFonts.inter(
-              fontSize: 8.5,
-              fontWeight: FontWeight.w800,
-              color: Colors.white.withOpacity(0.8),
+          // Nhãn dán phía trên hộp
+          Positioned(
+            top: -30,
+            left: 0,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: borderColor.withOpacity(0.9),
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.warning_amber_rounded, color: Colors.black, size: 14),
+                  const SizedBox(width: 4),
+                  Text(
+                    label,
+                    style: GoogleFonts.inter(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w900,
+                      color: Colors.black,
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    conf,
+                    style: GoogleFonts.inter(
+                      fontSize: 9,
+                      fontWeight: FontWeight.w700,
+                      color: Colors.black87,
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
         ],
@@ -982,6 +1017,7 @@ class _AlertWarning extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isEn = context.watch<SettingsProvider>().isEnglish;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       decoration: BoxDecoration(
@@ -1004,6 +1040,7 @@ class _AlertWarning extends StatelessWidget {
           TrafficSignIcon(
             label: label,
             size: 40,
+            isEn: isEn,
           ),
           const SizedBox(width: 14),
           Expanded(
@@ -1020,7 +1057,7 @@ class _AlertWarning extends StatelessWidget {
                     ),
                     const SizedBox(width: 4),
                     Text(
-                      'CẢNH BÁO PHÍA TRƯỚC',
+                      isEn ? 'WARNING AHEAD' : 'CẢNH BÁO PHÍA TRƯỚC',
                       style: GoogleFonts.inter(
                         fontSize: 9,
                         fontWeight: FontWeight.w900,
@@ -1032,7 +1069,7 @@ class _AlertWarning extends StatelessWidget {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  label.toUpperCase(),
+                  SignTranslator.translate(label, isEn),
                   style: GoogleFonts.inter(
                     fontSize: 14,
                     fontWeight: FontWeight.w900,

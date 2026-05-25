@@ -2,6 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../services/database_service.dart';
 import '../widgets/traffic_sign_icon.dart';
+import 'package:provider/provider.dart';
+import '../controllers/settings_provider.dart';
+import '../core/utils/sign_translator.dart';
 
 class StatsHistoryScreen extends StatefulWidget {
   const StatsHistoryScreen({super.key});
@@ -45,7 +48,8 @@ class _StatsHistoryScreenState extends State<StatsHistoryScreen> {
     await _loadHistory();
   }
 
-  void _showClearDialog() {
+  void _showClearDialog(BuildContext context) {
+    final isEn = context.read<SettingsProvider>().isEnglish;
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
@@ -55,7 +59,7 @@ class _StatsHistoryScreenState extends State<StatsHistoryScreen> {
           side: BorderSide(color: Colors.white.withOpacity(0.08)),
         ),
         title: Text(
-          'Xóa lịch sử quét?',
+          isEn ? 'Clear scan history?' : 'Xóa lịch sử quét?',
           style: GoogleFonts.inter(
             color: Colors.white,
             fontWeight: FontWeight.bold,
@@ -63,7 +67,7 @@ class _StatsHistoryScreenState extends State<StatsHistoryScreen> {
           ),
         ),
         content: Text(
-          'Tất cả lịch sử quét biển báo sẽ bị xóa vĩnh viễn và không thể khôi phục.',
+          isEn ? 'All scanned traffic signs will be permanently deleted and cannot be recovered.' : 'Tất cả lịch sử quét biển báo sẽ bị xóa vĩnh viễn và không thể khôi phục.',
           style: GoogleFonts.inter(
             color: Colors.white70,
             fontSize: 13,
@@ -74,7 +78,7 @@ class _StatsHistoryScreenState extends State<StatsHistoryScreen> {
           TextButton(
             onPressed: () => Navigator.pop(context),
             child: Text(
-              'Hủy',
+              isEn ? 'Cancel' : 'Hủy',
               style: GoogleFonts.inter(
                 color: Colors.white38,
                 fontWeight: FontWeight.w600,
@@ -87,7 +91,7 @@ class _StatsHistoryScreenState extends State<StatsHistoryScreen> {
               _clearAllHistory();
             },
             child: Text(
-              'Xóa tất cả',
+              isEn ? 'Clear all' : 'Xóa tất cả',
               style: GoogleFonts.inter(
                 color: Colors.redAccent,
                 fontWeight: FontWeight.bold,
@@ -102,11 +106,12 @@ class _StatsHistoryScreenState extends State<StatsHistoryScreen> {
   @override
   Widget build(BuildContext context) {
     final top = MediaQuery.of(context).padding.top;
+    final isEn = context.watch<SettingsProvider>().isEnglish;
     return Scaffold(
       backgroundColor: const Color(0xFF0C0C0E),
       body: Column(
         children: [
-          _buildHeader(top),
+          _buildHeader(top, isEn, context),
           Expanded(
             child: _isLoading
                 ? const Center(
@@ -115,7 +120,7 @@ class _StatsHistoryScreenState extends State<StatsHistoryScreen> {
                     ),
                   )
                 : _history.isEmpty
-                    ? _buildEmptyState()
+                    ? _buildEmptyState(isEn)
                     : RefreshIndicator(
                         onRefresh: _loadHistory,
                         color: const Color(0xFF60A5FA),
@@ -126,7 +131,7 @@ class _StatsHistoryScreenState extends State<StatsHistoryScreen> {
                           separatorBuilder: (_, __) => const SizedBox(height: 12),
                           itemBuilder: (context, index) {
                             final item = _history[index];
-                            return _HistoryCard(item: item);
+                            return _HistoryCard(item: item, isEn: isEn);
                           },
                         ),
                       ),
@@ -136,7 +141,7 @@ class _StatsHistoryScreenState extends State<StatsHistoryScreen> {
     );
   }
 
-  Widget _buildHeader(double top) {
+  Widget _buildHeader(double top, bool isEn, BuildContext context) {
     return Container(
       padding: EdgeInsets.only(top: top + 16, left: 16, right: 16, bottom: 8),
       decoration: const BoxDecoration(
@@ -154,7 +159,7 @@ class _StatsHistoryScreenState extends State<StatsHistoryScreen> {
               ),
               const SizedBox(width: 6),
               Text(
-                'LỊCH SỬ QUÉT',
+                isEn ? 'SCAN HISTORY' : 'LỊCH SỬ QUÉT',
                 style: GoogleFonts.inter(
                   fontSize: 11,
                   fontWeight: FontWeight.w800,
@@ -170,19 +175,19 @@ class _StatsHistoryScreenState extends State<StatsHistoryScreen> {
                     color: Colors.redAccent,
                     size: 20,
                   ),
-                  onPressed: _showClearDialog,
+                  onPressed: () => _showClearDialog(context),
                   tooltip: 'Xóa tất cả lịch sử',
                   constraints: const BoxConstraints(),
                   padding: const EdgeInsets.symmetric(horizontal: 8),
                 ),
                 const SizedBox(width: 4),
               ],
-              _HeaderChip(label: '${_history.length} BIỂN BÁO'),
+              _HeaderChip(label: isEn ? '${_history.length} SIGNS' : '${_history.length} BIỂN BÁO'),
             ],
           ),
           const SizedBox(height: 16),
           Text(
-            'Lịch sử nhận diện',
+            isEn ? 'Detection History' : 'Lịch sử nhận diện',
             style: GoogleFonts.inter(
               fontSize: 28,
               fontWeight: FontWeight.w800,
@@ -192,7 +197,7 @@ class _StatsHistoryScreenState extends State<StatsHistoryScreen> {
           ),
           const SizedBox(height: 4),
           Text(
-            'Danh sách các biển báo giao thông đã quét được.',
+            isEn ? 'List of scanned traffic signs.' : 'Danh sách các biển báo giao thông đã quét được.',
             style: GoogleFonts.inter(
               fontSize: 12.5,
               color: Colors.white38,
@@ -204,7 +209,7 @@ class _StatsHistoryScreenState extends State<StatsHistoryScreen> {
     );
   }
 
-  Widget _buildEmptyState() {
+  Widget _buildEmptyState(bool isEn) {
     return Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
@@ -216,7 +221,7 @@ class _StatsHistoryScreenState extends State<StatsHistoryScreen> {
           ),
           const SizedBox(height: 16),
           Text(
-            'Chưa có lịch sử quét',
+            isEn ? 'No scan history' : 'Chưa có lịch sử quét',
             style: GoogleFonts.inter(
               fontSize: 16,
               fontWeight: FontWeight.w600,
@@ -225,7 +230,7 @@ class _StatsHistoryScreenState extends State<StatsHistoryScreen> {
           ),
           const SizedBox(height: 8),
           Text(
-            'Các biển báo đã quét sẽ hiển thị tại đây.',
+            isEn ? 'Scanned signs will appear here.' : 'Các biển báo đã quét sẽ hiển thị tại đây.',
             style: GoogleFonts.inter(
               fontSize: 12,
               color: Colors.white24,
@@ -250,7 +255,7 @@ class _HeaderChip extends StatelessWidget {
         borderRadius: BorderRadius.circular(8),
       ),
       child: Text(
-        label.toUpperCase(),
+        SignTranslator.translate(label, context.watch<SettingsProvider>().isEnglish),
         style: GoogleFonts.inter(
           fontSize: 11,
           fontWeight: FontWeight.w800,
@@ -264,8 +269,9 @@ class _HeaderChip extends StatelessWidget {
 
 class _HistoryCard extends StatelessWidget {
   final HistoryItem item;
+  final bool isEn;
   
-  const _HistoryCard({required this.item});
+  const _HistoryCard({required this.item, required this.isEn});
 
   String _formatTime(DateTime time) {
     return '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')} - ${time.day.toString().padLeft(2, '0')}/${time.month.toString().padLeft(2, '0')}';
@@ -295,6 +301,7 @@ class _HistoryCard extends StatelessWidget {
           // Left: TrafficSignIcon thumbnail
           TrafficSignIcon(
             label: item.label,
+            isEn: isEn,
             size: 44,
           ),
           const SizedBox(width: 14),
@@ -305,7 +312,7 @@ class _HistoryCard extends StatelessWidget {
               children: [
                 // Title (Sign label in bold all-caps)
                 Text(
-                  item.label.toUpperCase(),
+                  SignTranslator.translate(item.label, isEn),
                   style: GoogleFonts.inter(
                     fontSize: 14.5,
                     fontWeight: FontWeight.w800,
@@ -374,7 +381,7 @@ class _HistoryCard extends StatelessWidget {
                   color: Colors.redAccent,
                   size: 20,
                 ),
-                onPressed: () => _showDeleteSingleDialog(context),
+                onPressed: () => _showDeleteSingleDialog(context, isEn),
                 constraints: const BoxConstraints(),
                 padding: EdgeInsets.zero,
                 splashRadius: 20,
@@ -387,7 +394,7 @@ class _HistoryCard extends StatelessWidget {
     );
   }
 
-  void _showDeleteSingleDialog(BuildContext context) {
+  void _showDeleteSingleDialog(BuildContext context, bool isEn) {
     showDialog(
       context: context,
       builder: (dialogCtx) => AlertDialog(
@@ -397,7 +404,7 @@ class _HistoryCard extends StatelessWidget {
           side: BorderSide(color: Colors.white.withOpacity(0.08)),
         ),
         title: Text(
-          'Xóa biển báo này?',
+          isEn ? 'Delete this sign?' : 'Xóa biển báo này?',
           style: GoogleFonts.inter(
             color: Colors.white,
             fontWeight: FontWeight.bold,
@@ -405,7 +412,7 @@ class _HistoryCard extends StatelessWidget {
           ),
         ),
         content: Text(
-          'Bạn có chắc chắn muốn xóa biển báo "${item.label.toUpperCase()}" này ra khỏi lịch sử không?',
+          isEn ? 'Are you sure you want to delete "${SignTranslator.translate(item.label, true)}" from history?' : 'Bạn có chắc chắn muốn xóa biển báo "${item.label.toUpperCase()}" này ra khỏi lịch sử không?',
           style: GoogleFonts.inter(
             color: Colors.white70,
             fontSize: 13,
@@ -416,7 +423,7 @@ class _HistoryCard extends StatelessWidget {
           TextButton(
             onPressed: () => Navigator.pop(dialogCtx),
             child: Text(
-              'Hủy',
+              isEn ? 'Cancel' : 'Hủy',
               style: GoogleFonts.inter(
                 color: Colors.white38,
                 fontWeight: FontWeight.w600,
@@ -429,7 +436,7 @@ class _HistoryCard extends StatelessWidget {
               await DatabaseService().deleteDetectionHistoryItem(item.id);
             },
             child: Text(
-              'Xóa',
+              isEn ? 'Delete' : 'Xóa',
               style: GoogleFonts.inter(
                 color: Colors.redAccent,
                 fontWeight: FontWeight.bold,

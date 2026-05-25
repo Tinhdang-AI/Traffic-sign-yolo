@@ -3,11 +3,13 @@ import 'package:flutter/material.dart';
 class TrafficSignIcon extends StatelessWidget {
   final String label;
   final double size;
+  final bool isEn;
 
   const TrafficSignIcon({
     super.key,
     required this.label,
     this.size = 44,
+    this.isEn = false,
   });
 
   @override
@@ -56,7 +58,7 @@ class TrafficSignIcon extends StatelessWidget {
             decoration: BoxDecoration(
               shape: BoxShape.circle,
               color: Colors.white,
-              border: Border.all(color: Colors.red, width: size * 0.12),
+              border: Border.all(color: const Color(0xFFE50000), width: size * 0.12),
             ),
           ),
           CustomPaint(
@@ -95,12 +97,12 @@ class TrafficSignIcon extends StatelessWidget {
             decoration: BoxDecoration(
               shape: BoxShape.circle,
               color: Colors.white,
-              border: Border.all(color: Colors.red, width: size * 0.12),
+              border: Border.all(color: const Color(0xFFE50000), width: size * 0.12),
             ),
           ),
           Positioned(
             left: size * 0.18,
-            child: Icon(Icons.directions_car, size: size * 0.38, color: Colors.red),
+            child: Icon(Icons.directions_car, size: size * 0.38, color: const Color(0xFFE50000)),
           ),
           Positioned(
             right: size * 0.18,
@@ -111,7 +113,7 @@ class TrafficSignIcon extends StatelessWidget {
             child: Container(
               width: size * 0.08,
               height: size * 0.8,
-              color: Colors.red,
+              color: const Color(0xFFE50000),
             ),
           ),
         ],
@@ -135,7 +137,7 @@ class TrafficSignIcon extends StatelessWidget {
           decoration: BoxDecoration(
             shape: BoxShape.circle,
             color: Colors.white,
-            border: Border.all(color: Colors.red, width: size * 0.15),
+            border: Border.all(color: const Color(0xFFE50000), width: size * 0.15),
           ),
         ),
         if (iconData != null)
@@ -145,7 +147,7 @@ class TrafficSignIcon extends StatelessWidget {
           child: Container(
             width: size * 0.1,
             height: size * 0.8,
-            color: Colors.red,
+            color: const Color(0xFFE50000),
           ),
         ),
       ],
@@ -156,7 +158,7 @@ class TrafficSignIcon extends StatelessWidget {
     return Container(
       width: size,
       height: size,
-      decoration: const BoxDecoration(shape: BoxShape.circle, color: Colors.red),
+      decoration: const BoxDecoration(shape: BoxShape.circle, color: const Color(0xFFE50000)),
       alignment: Alignment.center,
       child: Container(width: size * 0.7, height: size * 0.18, color: Colors.white),
     );
@@ -169,7 +171,7 @@ class TrafficSignIcon extends StatelessWidget {
       decoration: BoxDecoration(
         shape: BoxShape.circle, 
         color: Colors.white,
-        border: Border.all(color: Colors.red, width: size * 0.15),
+        border: Border.all(color: const Color(0xFFE50000), width: size * 0.15),
       ),
     );
   }
@@ -184,18 +186,18 @@ class TrafficSignIcon extends StatelessWidget {
           height: size,
           decoration: BoxDecoration(
             shape: BoxShape.circle,
-            color: Colors.blue[800],
-            border: Border.all(color: Colors.red, width: size * 0.12),
+            color: const Color(0xFF00539F),
+            border: Border.all(color: const Color(0xFFE50000), width: size * 0.12),
           ),
         ),
         Transform.rotate(
           angle: -0.785398,
-          child: Container(width: size * 0.1, height: size * 0.8, color: Colors.red),
+          child: Container(width: size * 0.1, height: size * 0.8, color: const Color(0xFFE50000)),
         ),
         if (isStopAndPark)
           Transform.rotate(
             angle: 0.785398,
-            child: Container(width: size * 0.1, height: size * 0.8, color: Colors.red),
+            child: Container(width: size * 0.1, height: size * 0.8, color: const Color(0xFFE50000)),
           ),
       ],
     );
@@ -234,7 +236,7 @@ class TrafficSignIcon extends StatelessWidget {
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                   children: [
-                    Container(width: size * 0.08, height: size * 0.08, decoration: const BoxDecoration(shape: BoxShape.circle, color: Colors.red)),
+                    Container(width: size * 0.08, height: size * 0.08, decoration: const BoxDecoration(shape: BoxShape.circle, color: const Color(0xFFE50000))),
                     Container(width: size * 0.08, height: size * 0.08, decoration: const BoxDecoration(shape: BoxShape.circle, color: Colors.amber)),
                     Container(width: size * 0.08, height: size * 0.08, decoration: const BoxDecoration(shape: BoxShape.circle, color: Colors.green)),
                   ],
@@ -267,7 +269,7 @@ class TrafficSignIcon extends StatelessWidget {
           child: Align(
             alignment: const Alignment(0, 0.45),
             child: Text(
-              'CHẬM',
+              isEn ? 'SLOW' : 'CHẬM',
               style: TextStyle(
                 color: Colors.black,
                 fontSize: size * 0.18,
@@ -315,7 +317,7 @@ class TrafficSignIcon extends StatelessWidget {
       decoration: BoxDecoration(
         shape: BoxShape.circle,
         color: Colors.white,
-        border: Border.all(color: Colors.red, width: size * 0.12),
+        border: Border.all(color: const Color(0xFFE50000), width: size * 0.12),
       ),
       alignment: Alignment.center,
       child: Padding(
@@ -345,7 +347,7 @@ class TrafficSignIcon extends StatelessWidget {
       height: size,
       decoration: BoxDecoration(
         shape: BoxShape.circle, 
-        color: Colors.blue[700],
+        color: const Color(0xFF00539F),
       ),
       alignment: Alignment.center,
       child: Padding(
@@ -426,7 +428,7 @@ class TrafficSignIcon extends StatelessWidget {
     return Container(
       width: size,
       height: size,
-      decoration: BoxDecoration(shape: BoxShape.circle, color: Colors.blue[700]),
+      decoration: BoxDecoration(shape: BoxShape.circle, color: const Color(0xFF00539F)),
       alignment: Alignment.center,
       child: Icon(iconData, color: Colors.white, size: size * 0.6),
     );
@@ -481,7 +483,7 @@ class TrafficSignIcon extends StatelessWidget {
       width: size,
       height: size * 0.7,
       decoration: BoxDecoration(
-        color: Colors.blue[700],
+        color: const Color(0xFF00539F),
         borderRadius: BorderRadius.circular(size * 0.1),
       ),
       alignment: Alignment.center,
@@ -492,7 +494,7 @@ class TrafficSignIcon extends StatelessWidget {
           if (l.contains('ngoài'))
             Transform.rotate(
               angle: 0.5,
-              child: Container(width: size * 0.8, height: size * 0.1, color: Colors.red),
+              child: Container(width: size * 0.8, height: size * 0.1, color: const Color(0xFFE50000)),
             ),
         ],
       ),
@@ -517,10 +519,10 @@ class _TrianglePainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final paint = Paint()
-      ..color = Colors.yellow
+      ..color = const Color(0xFFFFCC00)
       ..style = PaintingStyle.fill;
     final borderPaint = Paint()
-      ..color = Colors.red
+      ..color = const Color(0xFFE50000)
       ..style = PaintingStyle.stroke
       ..strokeWidth = size.width * 0.15
       ..strokeJoin = StrokeJoin.round;
@@ -546,7 +548,7 @@ class _OctagonPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final paint = Paint()
-      ..color = Colors.red
+      ..color = const Color(0xFFE50000)
       ..style = PaintingStyle.fill;
     final borderPaint = Paint()
       ..color = Colors.white

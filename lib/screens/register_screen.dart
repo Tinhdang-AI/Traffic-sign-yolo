@@ -5,6 +5,8 @@ import '../core/theme/app_colors.dart';
 import '../services/auth_service.dart';
 import 'login_screen.dart';
 import 'main_shell.dart';
+import 'package:provider/provider.dart';
+import '../controllers/settings_provider.dart';
 
 class RegisterScreen extends StatefulWidget {
   const RegisterScreen({super.key});
@@ -20,16 +22,16 @@ class _RegisterScreenState extends State<RegisterScreen> {
   final _passwordController = TextEditingController();
   final _confirmPasswordController = TextEditingController();
 
-  bool _isEmailSelected = true;
   bool _obscurePassword = true;
   bool _obscureConfirmPassword = true;
   bool _agreeToTerms = false;
   bool _isLoading = false;
 
   Future<void> _handleRegister() async {
+    final isEn = context.read<SettingsProvider>().isEnglish;
     if (!_agreeToTerms) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Vui lòng đồng ý với các điều khoản!')),
+        SnackBar(content: Text(isEn ? 'Please agree to terms!' : 'Vui lòng đồng ý với các điều khoản!')),
       );
       return;
     }
@@ -41,14 +43,14 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
     if (name.isEmpty || email.isEmpty || password.isEmpty || confirmPassword.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Vui lòng điền đầy đủ thông tin!')),
+        SnackBar(content: Text(isEn ? 'Please fill all fields!' : 'Vui lòng điền đầy đủ thông tin!')),
       );
       return;
     }
 
     if (password != confirmPassword) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Mật khẩu xác nhận không khớp!')),
+        SnackBar(content: Text(isEn ? 'Passwords do not match!' : 'Mật khẩu xác nhận không khớp!')),
       );
       return;
     }
@@ -61,7 +63,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Đăng ký thành công!')),
+          SnackBar(content: Text(isEn ? 'Registration successful!' : 'Đăng ký thành công!')),
         );
         Navigator.pushReplacement(
           context,
@@ -70,11 +72,11 @@ class _RegisterScreenState extends State<RegisterScreen> {
       }
     } on AuthException catch (e) {
       if (mounted) {
-        String errorMsg = 'Đăng ký thất bại!';
+        String errorMsg = isEn ? 'Registration failed!' : 'Đăng ký thất bại!';
         if (e.message.contains('already exists')) {
-          errorMsg = 'Email đã được sử dụng!';
+          errorMsg = isEn ? 'Email is already in use!' : 'Email đã được sử dụng!';
         } else if (e.message.contains('Password')) {
-          errorMsg = 'Mật khẩu không đủ mạnh!';
+          errorMsg = isEn ? 'Password is not strong enough!' : 'Mật khẩu không đủ mạnh!';
         }
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(errorMsg)),
@@ -83,7 +85,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Lỗi: $e')),
+          SnackBar(content: Text('${isEn ? 'Error' : 'Lỗi'}: $e')),
         );
       }
     } finally {
@@ -102,8 +104,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final isEn = context.watch<SettingsProvider>().isEnglish;
     return Scaffold(
-      backgroundColor: AppColors.background,
+      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
       body: SafeArea(
         child: CustomScrollView(
           slivers: [
@@ -115,18 +118,16 @@ class _RegisterScreenState extends State<RegisterScreen> {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     const SizedBox(height: 20),
-                    _buildHeader(),
+                    _buildHeader(isEn),
                     const SizedBox(height: 32),
-                    _buildTabToggle(),
-                    const SizedBox(height: 32),
-                    _buildForm(),
+                    _buildForm(isEn),
                     const SizedBox(height: 24),
-                    _buildTermsCheckbox(),
+                    _buildTermsCheckbox(isEn),
                     const SizedBox(height: 32),
-                    _buildRegisterButton(),
+                    _buildRegisterButton(isEn),
                     const Spacer(),
                     const SizedBox(height: 40),
-                    _buildFooter(),
+                    _buildFooter(isEn),
                   ],
                 ),
               ),
@@ -137,7 +138,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
     );
   }
 
-  Widget _buildHeader() {
+  Widget _buildHeader(bool isEn) {
     return Column(
       children: [
         Text(
@@ -151,20 +152,20 @@ class _RegisterScreenState extends State<RegisterScreen> {
         ),
         const SizedBox(height: 16),
         Text(
-          'Đăng ký tài khoản',
+          isEn ? 'Create an account' : 'Đăng ký tài khoản',
           style: GoogleFonts.inter(
             fontSize: 28,
             fontWeight: FontWeight.w800,
-            color: AppColors.onSurface,
+            color: Theme.of(context).colorScheme.onSurface,
           ),
         ),
         const SizedBox(height: 12),
         Text(
-          'Hệ thống hỗ trợ lái xe thông minh thế\nhệ mới',
+          isEn ? 'New generation smart driving\nsupport system' : 'Hệ thống hỗ trợ lái xe thông minh thế\nhệ mới',
           textAlign: TextAlign.center,
           style: GoogleFonts.inter(
             fontSize: 14,
-            color: AppColors.onSurfaceVariant.withOpacity(0.8),
+            color: Theme.of(context).colorScheme.onSurfaceVariant.withOpacity(0.8),
             height: 1.5,
           ),
         ),
@@ -172,91 +173,27 @@ class _RegisterScreenState extends State<RegisterScreen> {
     );
   }
 
-  Widget _buildTabToggle() {
-    return Container(
-      padding: const EdgeInsets.all(4),
-      decoration: BoxDecoration(
-        color: AppColors.surfaceContainerHigh.withOpacity(0.5),
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: GestureDetector(
-              onTap: () {
-                setState(() {
-                  _isEmailSelected = true;
-                });
-              },
-              child: Container(
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                decoration: BoxDecoration(
-                  color: _isEmailSelected ? AppColors.primary : Colors.transparent,
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: Text(
-                  'Email',
-                  textAlign: TextAlign.center,
-                  style: GoogleFonts.inter(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w700,
-                    color: _isEmailSelected ? AppColors.onPrimary : AppColors.onSurfaceVariant,
-                  ),
-                ),
-              ),
-            ),
-          ),
-          Expanded(
-            child: GestureDetector(
-              onTap: () {
-                setState(() {
-                  _isEmailSelected = false;
-                });
-              },
-              child: Container(
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                decoration: BoxDecoration(
-                  color: !_isEmailSelected ? AppColors.primary : Colors.transparent,
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: Text(
-                  'Số điện thoại',
-                  textAlign: TextAlign.center,
-                  style: GoogleFonts.inter(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w700,
-                    color: !_isEmailSelected ? AppColors.onPrimary : AppColors.onSurfaceVariant,
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildForm() {
+  Widget _buildForm(bool isEn) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _buildFieldLabel('Họ và tên'),
+        _buildFieldLabel(isEn ? 'Full name' : 'Họ và tên'),
         _buildTextField(
           controller: _nameController,
-          hint: 'Nhập họ và tên của bạn',
+          hint: isEn ? 'Enter your full name' : 'Nhập họ và tên của bạn',
           prefixIcon: Icons.person_outline,
         ),
         const SizedBox(height: 20),
         
-        _buildFieldLabel('Email / Số điện thoại'),
+        _buildFieldLabel(isEn ? 'Email' : 'Email'),
         _buildTextField(
           controller: _emailController,
-          hint: 'vidu@sentinel.ai',
+          hint: isEn ? 'example@sentinel.ai' : 'vidu@sentinel.ai',
           prefixIcon: Icons.email_outlined,
         ),
         const SizedBox(height: 20),
 
-        _buildFieldLabel('Mật khẩu'),
+        _buildFieldLabel(isEn ? 'Password' : 'Mật khẩu'),
         _buildTextField(
           controller: _passwordController,
           hint: '••••••••',
@@ -265,7 +202,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
         ),
         const SizedBox(height: 20),
 
-        _buildFieldLabel('Xác nhận'),
+        _buildFieldLabel(isEn ? 'Confirm' : 'Xác nhận'),
         _buildTextField(
           controller: _confirmPasswordController,
           hint: '••••••••',
@@ -284,7 +221,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
         style: GoogleFonts.inter(
           fontSize: 12,
           fontWeight: FontWeight.w600,
-          color: AppColors.onSurfaceVariant,
+          color: Theme.of(context).colorScheme.onSurfaceVariant,
         ),
       ),
     );
@@ -298,25 +235,25 @@ class _RegisterScreenState extends State<RegisterScreen> {
   }) {
     return Container(
       decoration: BoxDecoration(
-        color: AppColors.surfaceContainerHigh.withOpacity(0.7),
+        color: Theme.of(context).colorScheme.surfaceVariant.withOpacity(0.7),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.white.withOpacity(0.04)),
+        border: Border.all(color: Theme.of(context).colorScheme.onSurface.withOpacity(0.04)),
       ),
       child: TextField(
         controller: controller,
         obscureText: obscureText,
         style: GoogleFonts.inter(
           fontSize: 14,
-          color: AppColors.onSurface,
+          color: Theme.of(context).colorScheme.onSurface,
           fontWeight: FontWeight.w500,
         ),
         decoration: InputDecoration(
           hintText: hint,
           hintStyle: GoogleFonts.inter(
             fontSize: 14,
-            color: AppColors.onSurfaceVariant.withOpacity(0.5),
+            color: Theme.of(context).colorScheme.onSurfaceVariant.withOpacity(0.5),
           ),
-          prefixIcon: Icon(prefixIcon, color: AppColors.onSurfaceVariant.withOpacity(0.5), size: 20),
+          prefixIcon: Icon(prefixIcon, color: Theme.of(context).colorScheme.onSurfaceVariant.withOpacity(0.5), size: 20),
           border: InputBorder.none,
           contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
         ),
@@ -324,7 +261,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
     );
   }
 
-  Widget _buildTermsCheckbox() {
+  Widget _buildTermsCheckbox(bool isEn) {
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -340,7 +277,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
             },
             activeColor: AppColors.primary,
             checkColor: AppColors.onPrimary,
-            side: BorderSide(color: AppColors.onSurfaceVariant.withOpacity(0.5)),
+            side: BorderSide(color: Theme.of(context).colorScheme.onSurfaceVariant.withOpacity(0.5)),
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
           ),
         ),
@@ -350,21 +287,21 @@ class _RegisterScreenState extends State<RegisterScreen> {
             text: TextSpan(
               style: GoogleFonts.inter(
                 fontSize: 13,
-                color: AppColors.onSurfaceVariant,
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
                 height: 1.5,
               ),
               children: [
-                const TextSpan(text: 'Tôi đồng ý với '),
+                TextSpan(text: isEn ? 'I agree to the ' : 'Tôi đồng ý với '),
                 TextSpan(
-                  text: 'Điều khoản dịch vụ',
+                  text: isEn ? 'Terms of Service' : 'Điều khoản dịch vụ',
                   style: TextStyle(color: AppColors.primary, fontWeight: FontWeight.w600),
                 ),
-                const TextSpan(text: ' và '),
+                TextSpan(text: isEn ? ' and ' : ' và '),
                 TextSpan(
-                  text: 'Chính sách bảo mật',
+                  text: isEn ? 'Privacy Policy' : 'Chính sách bảo mật',
                   style: TextStyle(color: AppColors.primary, fontWeight: FontWeight.w600),
                 ),
-                const TextSpan(text: ' của Sentinel AI.'),
+                TextSpan(text: isEn ? ' of Sentinel AI.' : ' của Sentinel AI.'),
               ],
             ),
           ),
@@ -373,7 +310,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
     );
   }
 
-  Widget _buildRegisterButton() {
+  Widget _buildRegisterButton(bool isEn) {
     return SizedBox(
       width: double.infinity,
       height: 52,
@@ -393,7 +330,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 child: CircularProgressIndicator(color: AppColors.onPrimary, strokeWidth: 2)
               )
             : Text(
-                'ĐĂNG KÝ',
+                isEn ? 'REGISTER' : 'ĐĂNG KÝ',
                 style: GoogleFonts.inter(
                   fontSize: 14,
                   fontWeight: FontWeight.w700,
@@ -405,7 +342,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
     );
   }
 
-  Widget _buildFooter() {
+  Widget _buildFooter(bool isEn) {
     return Center(
       child: GestureDetector(
         onTap: () {
@@ -421,12 +358,12 @@ class _RegisterScreenState extends State<RegisterScreen> {
             text: TextSpan(
               style: GoogleFonts.inter(
                 fontSize: 16,
-                color: AppColors.onSurfaceVariant,
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
               ),
               children: [
-                const TextSpan(text: 'Đã có tài khoản? '),
+                TextSpan(text: isEn ? 'Already have an account? ' : 'Đã có tài khoản? '),
                 TextSpan(
-                  text: 'Đăng nhập ngay',
+                  text: isEn ? 'Login now' : 'Đăng nhập ngay',
                   style: TextStyle(
                     color: AppColors.primary, 
                     fontWeight: FontWeight.w800,

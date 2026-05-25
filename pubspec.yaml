@@ -74,6 +74,7 @@ dependencies:
   flutter_secure_storage: ^10.2.0
   connectivity_plus:
   supabase_flutter: ^2.3.0
+  sensors_plus: ^7.0.0
 
 dependency_overrides:
   google_fonts:

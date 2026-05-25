@@ -1,10 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:traffic_detect/core/theme/app_colors.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+
+import 'package:traffic_detect/core/theme/app_colors.dart';
+
 import '../services/auth_service.dart';
-import 'register_screen.dart';
+import 'forgot_password_screen.dart';
 import 'main_shell.dart';
+import 'register_screen.dart';
+import 'package:provider/provider.dart';
+import '../controllers/settings_provider.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -15,6 +20,7 @@ class LoginScreen extends StatefulWidget {
 
 class _LoginScreenState extends State<LoginScreen> {
   final _authService = AuthService();
+
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
 
@@ -25,9 +31,12 @@ class _LoginScreenState extends State<LoginScreen> {
     final email = _emailController.text.trim();
     final password = _passwordController.text.trim();
 
+    final isEn = context.read<SettingsProvider>().isEnglish;
     if (email.isEmpty || password.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Vui lòng nhập đầy đủ email và mật khẩu!')),
+        SnackBar(
+          content: Text(isEn ? 'Please enter email and password!' : 'Vui lòng nhập đầy đủ email và mật khẩu!'),
+        ),
       );
       return;
     }
@@ -36,29 +45,47 @@ class _LoginScreenState extends State<LoginScreen> {
 
     try {
       await _authService.signInWithEmailPassword(email, password);
+
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Đăng nhập thành công!')),
+          SnackBar(
+            content: Text(isEn ? 'Login successful!' : 'Đăng nhập thành công!'),
+          ),
         );
+
         Navigator.pushReplacement(
           context,
-          MaterialPageRoute(builder: (context) => const MainShell()),
+          MaterialPageRoute(
+            builder: (context) => const MainShell(),
+          ),
         );
       }
     } on AuthException catch (e) {
       if (mounted) {
-        String errorMsg = 'Đăng nhập thất bại!';
+        String errorMsg = isEn ? 'Login failed!' : 'Đăng nhập thất bại!';
+
         if (e.message.contains('Invalid login credentials')) {
-          errorMsg = 'Email hoặc mật khẩu không chính xác!';
+          errorMsg = isEn ? 'Incorrect email or password!' : 'Email hoặc mật khẩu không chính xác!';
         } else if (e.message.contains('Email not confirmed')) {
-          errorMsg = 'Vui lòng xác nhận email của bạn!';
+          errorMsg = isEn ? 'Please confirm your email!' : 'Vui lòng xác nhận email của bạn!';
         }
-      
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(errorMsg)),
+        );
       }
     } catch (e) {
-  
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('${isEn ? 'An error occurred' : 'Đã xảy ra lỗi'}: $e'),
+          ),
+        );
+      }
     } finally {
-      if (mounted) setState(() => _isLoading = false);
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
     }
   }
 
@@ -71,24 +98,28 @@ class _LoginScreenState extends State<LoginScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final isEn = context.watch<SettingsProvider>().isEnglish;
     return Scaffold(
-      backgroundColor: AppColors.background,
+      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
       body: SafeArea(
         child: CustomScrollView(
           slivers: [
             SliverFillRemaining(
               hasScrollBody: false,
               child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 24,
+                  vertical: 24,
+                ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     const SizedBox(height: 20),
                     _buildLogo(),
                     const SizedBox(height: 40),
-                    _buildLoginCard(),
+                    _buildLoginCard(isEn),
                     const SizedBox(height: 24),
-                    _buildRegisterLink(),
+                    _buildRegisterLink(isEn),
                     const Spacer(),
                     _buildFooter(),
                   ],
@@ -110,7 +141,9 @@ class _LoginScreenState extends State<LoginScreen> {
           decoration: BoxDecoration(
             color: AppColors.primaryContainer.withOpacity(0.2),
             borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: AppColors.primaryContainer.withOpacity(0.3)),
+            border: Border.all(
+              color: AppColors.primaryContainer.withOpacity(0.3),
+            ),
           ),
           child: const Icon(
             Icons.shield_outlined,
@@ -125,72 +158,88 @@ class _LoginScreenState extends State<LoginScreen> {
             fontSize: 22,
             fontWeight: FontWeight.w800,
             letterSpacing: 1.5,
-            color: AppColors.onSurface,
+            color: Theme.of(context).colorScheme.onSurface,
           ),
         ),
       ],
     );
   }
 
-  Widget _buildLoginCard() {
+  Widget _buildLoginCard(bool isEn) {
     return Container(
       padding: const EdgeInsets.all(24),
       decoration: BoxDecoration(
-        color: AppColors.surfaceContainerLow,
+        color: Theme.of(context).colorScheme.surfaceVariant,
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: Colors.white.withOpacity(0.04)),
+        border: Border.all(
+          color: Theme.of(context).colorScheme.onSurface.withOpacity(0.04),
+        ),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            'Đăng nhập',
+            isEn ? 'Login' : 'Đăng nhập',
             style: GoogleFonts.inter(
               fontSize: 28,
               fontWeight: FontWeight.w800,
-              color: AppColors.onSurface,
+              color: Theme.of(context).colorScheme.onSurface,
             ),
           ),
           const SizedBox(height: 8),
           Text(
-            'Vui lòng truy cập vào hệ thống giám sát của bạn',
+            isEn ? 'Please log in to your monitoring system' : 'Vui lòng truy cập vào hệ thống giám sát của bạn',
             style: GoogleFonts.inter(
               fontSize: 14,
-              color: AppColors.onSurfaceVariant.withOpacity(0.8),
+              color: Theme.of(context).colorScheme.onSurfaceVariant.withOpacity(0.8),
               height: 1.5,
             ),
           ),
           const SizedBox(height: 32),
+
+          /// EMAIL
           Text(
-            'Email hoặc Số điện thoại',
+            'Email',
             style: GoogleFonts.inter(
               fontSize: 12,
               fontWeight: FontWeight.w700,
-              color: AppColors.onSurfaceVariant,
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
             ),
           ),
           const SizedBox(height: 8),
+
           _buildTextField(
             controller: _emailController,
             hint: 'example@gmail.com',
             prefixIcon: Icons.alternate_email,
           ),
+
           const SizedBox(height: 20),
+
+          /// PASSWORD LABEL
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Text(
-                'Mật khẩu',
+                isEn ? 'Password' : 'Mật khẩu',
                 style: GoogleFonts.inter(
                   fontSize: 12,
                   fontWeight: FontWeight.w700,
-                  color: AppColors.onSurfaceVariant,
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
                 ),
               ),
               GestureDetector(
-                onTap: () {},
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) =>
+                          const ForgotPasswordScreen(),
+                    ),
+                  );
+                },
                 child: Text(
-                  'Quên mật khẩu?',
+                  isEn ? 'Forgot password?' : 'Quên mật khẩu?',
                   style: GoogleFonts.inter(
                     fontSize: 11,
                     fontWeight: FontWeight.w600,
@@ -200,7 +249,9 @@ class _LoginScreenState extends State<LoginScreen> {
               ),
             ],
           ),
+
           const SizedBox(height: 8),
+
           _buildTextField(
             controller: _passwordController,
             hint: '••••••••',
@@ -208,8 +259,10 @@ class _LoginScreenState extends State<LoginScreen> {
             obscureText: _obscurePassword,
             suffixIcon: IconButton(
               icon: Icon(
-                _obscurePassword ? Icons.visibility_outlined : Icons.visibility_off_outlined,
-                color: AppColors.onSurfaceVariant.withOpacity(0.5),
+                _obscurePassword
+                    ? Icons.visibility_outlined
+                    : Icons.visibility_off_outlined,
+                color: Theme.of(context).colorScheme.onSurfaceVariant.withOpacity(0.5),
                 size: 20,
               ),
               onPressed: () {
@@ -219,7 +272,10 @@ class _LoginScreenState extends State<LoginScreen> {
               },
             ),
           ),
+
           const SizedBox(height: 24),
+
+          /// LOGIN BUTTON
           SizedBox(
             width: double.infinity,
             height: 52,
@@ -234,9 +290,15 @@ class _LoginScreenState extends State<LoginScreen> {
                         strokeWidth: 2,
                       ),
                     )
-                  : const Icon(Icons.login, size: 20, color: AppColors.onPrimary),
+                  : const Icon(
+                      Icons.login,
+                      size: 20,
+                      color: AppColors.onPrimary,
+                    ),
               label: Text(
-                _isLoading ? 'ĐANG ĐĂNG NHẬP...' : 'ĐĂNG NHẬP',
+                _isLoading
+                    ? (isEn ? 'LOGGING IN...' : 'ĐANG ĐĂNG NHẬP...')
+                    : (isEn ? 'LOGIN' : 'ĐĂNG NHẬP'),
                 style: GoogleFonts.inter(
                   fontSize: 14,
                   fontWeight: FontWeight.w700,
@@ -246,52 +308,14 @@ class _LoginScreenState extends State<LoginScreen> {
               ),
               style: ElevatedButton.styleFrom(
                 backgroundColor: AppColors.primary,
-                disabledBackgroundColor: AppColors.primary.withOpacity(0.5),
+                disabledBackgroundColor:
+                    AppColors.primary.withOpacity(0.5),
+                elevation: 0,
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(12),
                 ),
-                elevation: 0,
               ),
             ),
-          ),
-          const SizedBox(height: 32),
-          Row(
-            children: [
-              Expanded(child: Divider(color: Colors.white.withOpacity(0.05), thickness: 1)),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-                child: Text(
-                  'HOẶC TIẾP TỤC VỚI',
-                  style: GoogleFonts.inter(
-                    fontSize: 10,
-                    fontWeight: FontWeight.w600,
-                    letterSpacing: 1.0,
-                    color: AppColors.onSurfaceVariant.withOpacity(0.4),
-                  ),
-                ),
-              ),
-              Expanded(child: Divider(color: Colors.white.withOpacity(0.05), thickness: 1)),
-            ],
-          ),
-          const SizedBox(height: 24),
-          Row(
-            children: [
-              Expanded(
-                child: _buildSocialButton(
-                  icon: Icons.g_mobiledata,
-                  label: 'Google',
-                  onTap: () {},
-                ),
-              ),
-              const SizedBox(width: 16),
-              Expanded(
-                child: _buildSocialButton(
-                  icon: Icons.apple,
-                  label: 'Apple',
-                  onTap: () {},
-                ),
-              ),
-            ],
           ),
         ],
       ),
@@ -307,93 +331,71 @@ class _LoginScreenState extends State<LoginScreen> {
   }) {
     return Container(
       decoration: BoxDecoration(
-        color: AppColors.surfaceContainerHigh.withOpacity(0.7),
+        color: Theme.of(context).colorScheme.surfaceVariant.withOpacity(0.7),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.white.withOpacity(0.04)),
+        border: Border.all(
+          color: Theme.of(context).colorScheme.onSurface.withOpacity(0.04),
+        ),
       ),
       child: TextField(
         controller: controller,
         obscureText: obscureText,
         style: GoogleFonts.inter(
           fontSize: 14,
-          color: AppColors.onSurface,
+          color: Theme.of(context).colorScheme.onSurface,
           fontWeight: FontWeight.w500,
         ),
         decoration: InputDecoration(
           hintText: hint,
           hintStyle: GoogleFonts.inter(
             fontSize: 14,
-            color: AppColors.onSurfaceVariant.withOpacity(0.5),
+            color: Theme.of(context).colorScheme.onSurfaceVariant.withOpacity(0.5),
           ),
           prefixIcon: Icon(
             prefixIcon,
-            color: AppColors.onSurfaceVariant.withOpacity(0.5),
+            color: Theme.of(context).colorScheme.onSurfaceVariant.withOpacity(0.5),
             size: 20,
           ),
           suffixIcon: suffixIcon,
           border: InputBorder.none,
-          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 16,
+            vertical: 16,
+          ),
         ),
       ),
     );
   }
 
-  Widget _buildSocialButton({
-    required IconData icon,
-    required String label,
-    required VoidCallback onTap,
-  }) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(12),
-      child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 14),
-        decoration: BoxDecoration(
-          color: Colors.transparent,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: Colors.white.withOpacity(0.08)),
-        ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(icon, color: AppColors.onSurface, size: 20),
-            const SizedBox(width: 8),
-            Text(
-              label,
-              style: GoogleFonts.inter(
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
-                color: AppColors.onSurface,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildRegisterLink() {
+  Widget _buildRegisterLink(bool isEn) {
     return Center(
       child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
         onTap: () {
           Navigator.pushReplacement(
             context,
-            MaterialPageRoute(builder: (context) => const RegisterScreen()),
+            MaterialPageRoute(
+              builder: (context) => const RegisterScreen(),
+            ),
           );
         },
-        behavior: HitTestBehavior.opaque,
         child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 12.0, horizontal: 16.0),
+          padding: const EdgeInsets.symmetric(
+            vertical: 12,
+            horizontal: 16,
+          ),
           child: RichText(
             text: TextSpan(
               style: GoogleFonts.inter(
                 fontSize: 16,
-                color: AppColors.onSurfaceVariant,
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
               ),
               children: [
-                const TextSpan(text: 'Chưa có tài khoản? '),
                 TextSpan(
-                  text: 'Đăng ký ngay',
+                  text: isEn ? "Don't have an account? " : 'Chưa có tài khoản? ',
+                ),
+                TextSpan(
+                  text: isEn ? 'Register now' : 'Đăng ký ngay',
                   style: TextStyle(
                     color: AppColors.primary,
                     fontWeight: FontWeight.w800,
@@ -417,7 +419,7 @@ class _LoginScreenState extends State<LoginScreen> {
         style: GoogleFonts.inter(
           fontSize: 11,
           fontWeight: FontWeight.w500,
-          color: AppColors.onSurfaceVariant.withOpacity(0.4),
+          color: Theme.of(context).colorScheme.onSurfaceVariant.withOpacity(0.4),
         ),
       ),
     );

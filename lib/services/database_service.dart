@@ -5,6 +5,8 @@ import 'package:path/path.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:uuid/uuid.dart';
 import 'location_service.dart';
+import 'nextjs_api_service.dart';
+import 'auth_service.dart';
 
 class HistoryItem {
   final String id;
@@ -15,6 +17,7 @@ class HistoryItem {
   final DateTime timestamp;
   final String locationName;
   final Uint8List? imageBytes;
+  final String userId;
 
   HistoryItem({
     required this.id,
@@ -25,6 +28,7 @@ class HistoryItem {
     required this.timestamp,
     required this.locationName,
     this.imageBytes,
+    required this.userId,
   });
 
   Map<String, dynamic> toMap() {
@@ -37,6 +41,7 @@ class HistoryItem {
       'timestamp': timestamp.millisecondsSinceEpoch,
       'locationName': locationName,
       'imageBytes': imageBytes,
+      'userId': userId,
     };
   }
 
@@ -50,6 +55,7 @@ class HistoryItem {
       timestamp: DateTime.fromMillisecondsSinceEpoch(map['timestamp']),
       locationName: map['locationName'] ?? '',
       imageBytes: map['imageBytes'],
+      userId: map['userId'] ?? 'guest',
     );
   }
 
@@ -81,7 +87,7 @@ class DatabaseService {
   static const String dbName = 'sentinel_local.db';
   static const String pendingReportsTable = 'pending_reports';
   static const String detectionHistoryTable = 'detection_history';
-  static const int dbVersion = 3;
+  static const int dbVersion = 4;
 
   Future<Database> get database async {
     if (_database != null) return _database!;
@@ -134,11 +140,15 @@ class DatabaseService {
         longitude REAL NOT NULL,
         timestamp INTEGER NOT NULL,
         locationName TEXT NOT NULL,
-        imageBytes BLOB
+        imageBytes BLOB,
+        userId TEXT NOT NULL DEFAULT 'guest'
       )
     ''');
     await db.execute(
       'CREATE INDEX idx_history_timestamp ON $detectionHistoryTable(timestamp DESC)',
+    );
+    await db.execute(
+      'CREATE INDEX idx_history_user ON $detectionHistoryTable(userId)',
     );
   }
 
@@ -157,12 +167,20 @@ class DatabaseService {
           longitude REAL NOT NULL,
           timestamp INTEGER NOT NULL,
           locationName TEXT NOT NULL,
-          imageBytes BLOB
+          imageBytes BLOB,
+          userId TEXT NOT NULL DEFAULT 'guest'
         )
       ''');
       await db.execute(
         'CREATE INDEX IF NOT EXISTS idx_history_timestamp ON $detectionHistoryTable(timestamp DESC)',
       );
+      await db.execute(
+        'CREATE INDEX IF NOT EXISTS idx_history_user ON $detectionHistoryTable(userId)',
+      );
+    }
+    if (oldVersion < 4) {
+      await db.execute('ALTER TABLE $detectionHistoryTable ADD COLUMN userId TEXT DEFAULT "guest"');
+      await db.execute('CREATE INDEX IF NOT EXISTS idx_history_user ON $detectionHistoryTable(userId)');
     }
   }
 
@@ -366,6 +384,8 @@ class DatabaseService {
   }) async {
     final db = await database;
     final id = const Uuid().v4();
+    final userId = AuthService().currentUser?.id ?? 'guest';
+    
     final item = HistoryItem(
       id: id,
       label: label,
@@ -375,6 +395,7 @@ class DatabaseService {
       timestamp: DateTime.now(),
       locationName: locationName,
       imageBytes: imageBytes,
+      userId: userId,
     );
     await db.insert(
       detectionHistoryTable,
@@ -382,23 +403,56 @@ class DatabaseService {
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
     debugPrint('Saved detection to history: $label');
+    
+    // Upload to backend
+    try {
+      String? imageUrl;
+      if (imageBytes != null && imageBytes.isNotEmpty) {
+        try {
+          imageUrl = await NestJsApiService().uploadImage(imageBytes, '${id}.jpg');
+        } catch (e) {
+          debugPrint('Failed to upload image, continuing without it: $e');
+        }
+      }
+      
+      await NestJsApiService().recordDetection(
+        latitude: latitude,
+        longitude: longitude,
+        confidence: confidence,
+        detectionType: label,
+        description: locationName,
+        imageUrl: imageUrl,
+      );
+      debugPrint('Synced detection to backend: $label');
+    } catch (e) {
+      debugPrint('Failed to sync detection to backend: $e');
+    }
+    
     historyChangeNotifier.value++;
   }
 
-  /// Get all detection history
+  /// Get all detection history for current user
   Future<List<HistoryItem>> getDetectionHistory() async {
     final db = await database;
+    final userId = AuthService().currentUser?.id ?? 'guest';
     final maps = await db.query(
       detectionHistoryTable,
+      where: 'userId = ?',
+      whereArgs: [userId],
       orderBy: 'timestamp DESC',
     );
     return maps.map((e) => HistoryItem.fromMap(e)).toList();
   }
 
-  /// Clear all detection history
+  /// Clear all detection history for current user
   Future<void> clearDetectionHistory() async {
     final db = await database;
-    await db.delete(detectionHistoryTable);
+    final userId = AuthService().currentUser?.id ?? 'guest';
+    await db.delete(
+      detectionHistoryTable,
+      where: 'userId = ?',
+      whereArgs: [userId],
+    );
     historyChangeNotifier.value++;
   }
 

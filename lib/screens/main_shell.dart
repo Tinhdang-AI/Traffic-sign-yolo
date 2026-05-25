@@ -2,8 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:traffic_detect/core/theme/app_colors.dart';
 import 'ar_detection_screen.dart';
 import 'stats_history_screen.dart';
-// import 'community_report_screen.dart'; // Đã comment trang CommunityReportScreen theo yêu cầu
 import 'profile_screen.dart';
+import 'package:provider/provider.dart';
+import '../controllers/settings_provider.dart';
 import 'map_sos_screen.dart';
 
 class MainShell extends StatefulWidget {
@@ -25,6 +26,8 @@ class _MainShellState extends State<MainShell> {
 
   @override
   Widget build(BuildContext context) {
+    final isEn = context.watch<SettingsProvider>().isEnglish;
+    
     return Scaffold(
       extendBody: true,
       body: IndexedStack(
@@ -33,11 +36,11 @@ class _MainShellState extends State<MainShell> {
       ),
       bottomNavigationBar: _SentinelBottomNav(
         currentIndex: _currentIndex,
-        items: const [
-          _NavItem(Icons.center_focus_weak_rounded, Icons.center_focus_strong_rounded, 'AR Scan'),
-          _NavItem(Icons.history, Icons.history, 'History'),
-          _NavItem(Icons.map_rounded, Icons.map, 'Map'),
-          _NavItem(Icons.person_outline, Icons.person, 'Profile'),
+        items: [
+          _NavItem(Icons.center_focus_weak_rounded, Icons.center_focus_strong_rounded, isEn ? 'AR Scan' : 'Quét AR'),
+          _NavItem(Icons.history, Icons.history, isEn ? 'History' : 'Lịch sử'),
+          _NavItem(Icons.map_rounded, Icons.map, isEn ? 'Map' : 'Bản đồ'),
+          _NavItem(Icons.person_outline, Icons.person, isEn ? 'Profile' : 'Cá nhân'),
         ],
         onTap: (i) => setState(() => _currentIndex = i),
       ),

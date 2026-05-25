@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:provider/provider.dart';
 import 'package:traffic_detect/core/theme/app_colors.dart';
 import '../services/auth_service.dart';
+import '../controllers/settings_provider.dart';
 import 'login_screen.dart';
-import 'community_report_screen.dart';
+import 'user_profile_screen.dart';
+import 'support_screen.dart';
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
@@ -18,90 +21,120 @@ class _ProfileScreenState extends State<ProfileScreen> {
   @override
   Widget build(BuildContext context) {
     final top = MediaQuery.of(context).padding.top;
-    return Scaffold(
-      backgroundColor: AppColors.background,
-      body: Column(
-        children: [
-          _buildHeader(top),
-          Expanded(
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
-              child: Column(
-                children: [
-                  _buildProfileInfo(),
-                  const SizedBox(height: 24),
-                  _buildMenuSection([
-                    _MenuItem(
-                        icon: Icons.person_outline,
-                        iconColor: AppColors.primary,
-                        title: 'Thông tin cá nhân'),
-                  ]),
-                  const SizedBox(height: 12),
-                  _buildMenuSection([
-                    _MenuItem(
-                        icon: Icons.notifications_active_outlined,
-                        iconColor: AppColors.secondary,
-                        title: 'Cài đặt thông báo'),
-                    _MenuItem(
-                        icon: Icons.campaign_outlined,
-                        iconColor: AppColors.secondary,
-                        title: 'Báo cáo sự cố',
-                        subtitle: 'Cảnh báo tai nạn, ngập lụt, công trình...',
-                        onTap: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(builder: (context) => const CommunityReportScreen()),
-                          );
-                        }),
-                  ]),
-                  const SizedBox(height: 12),
-                  _buildMenuSection([
-                    _MenuItem(
-                        icon: Icons.help_outline,
-                        iconColor: AppColors.onSurfaceVariant,
-                        title: 'Hỗ trợ'),
-                  ]),
-                  const SizedBox(height: 12),
-                  _buildMenuSection([
-                    _MenuItem(
-                      icon: Icons.logout,
-                      iconColor: AppColors.error,
-                      title: 'Đăng xuất',
-                      titleColor: AppColors.error,
-                      hideArrow: true,
-                      onTap: () async {
-                        await _authService.signOut();
-                        if (mounted) {
-                          Navigator.pushAndRemoveUntil(
-                            context,
-                            MaterialPageRoute(builder: (context) => const LoginScreen()),
-                            (route) => false,
-                          );
-                        }
-                      },
-                    ),
-                  ]),
-                  const SizedBox(height: 40),
-                  _buildFooter(),
-                  const SizedBox(height: 20),
-                ],
+    final colorScheme = Theme.of(context).colorScheme;
+    
+    return Consumer<SettingsProvider>(
+      builder: (context, settings, _) {
+        final isEn = settings.isEnglish;
+        
+        return Scaffold(
+          backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+          body: Column(
+            children: [
+              _buildHeader(top, colorScheme),
+              Expanded(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+                  child: Column(
+                    children: [
+                      _buildProfileInfo(colorScheme),
+                      const SizedBox(height: 24),
+                      _buildMenuSection([
+                        _MenuItem(
+                          icon: Icons.person_outline,
+                          iconColor: colorScheme.primary,
+                          title: isEn ? 'Personal Information' : 'Thông tin cá nhân',
+                          onTap: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(builder: (_) => const UserProfileScreen()),
+                            );
+                          },
+                        ),
+                      ], colorScheme),
+                      const SizedBox(height: 12),
+                      _buildMenuSection([
+                        _MenuItem(
+                          icon: Icons.dark_mode_outlined,
+                          iconColor: colorScheme.secondary,
+                          title: isEn ? 'Dark Mode' : 'Chế độ tối',
+                          hideArrow: true,
+                          trailing: Switch(
+                            value: settings.darkMode,
+                            onChanged: (val) => settings.toggleTheme(val),
+                            activeColor: colorScheme.primary,
+                          ),
+                        ),
+                        _MenuItem(
+                          icon: Icons.language,
+                          iconColor: Colors.green,
+                          title: isEn ? 'Language: English' : 'Ngôn ngữ: Tiếng Việt',
+                          hideArrow: true,
+                          trailing: Switch(
+                            value: settings.isEnglish,
+                            onChanged: (val) => settings.toggleLanguage(val),
+                            activeColor: Colors.green,
+                            inactiveThumbColor: Colors.white54,
+                          ),
+                        ),
+                      ], colorScheme),
+                      const SizedBox(height: 12),
+                      _buildMenuSection([
+                        _MenuItem(
+                          icon: Icons.help_outline,
+                          iconColor: colorScheme.onSurfaceVariant,
+                          title: isEn ? 'Support' : 'Hỗ trợ',
+                          onTap: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(builder: (_) => const SupportScreen()),
+                            );
+                          },
+                        ),
+                      ], colorScheme),
+                      const SizedBox(height: 12),
+                      _buildMenuSection([
+                        _MenuItem(
+                          icon: Icons.logout,
+                          iconColor: colorScheme.error,
+                          title: isEn ? 'Logout' : 'Đăng xuất',
+                          titleColor: colorScheme.error,
+                          hideArrow: true,
+                          onTap: () async {
+                            await _authService.signOut();
+                            if (mounted) {
+                              Navigator.pushAndRemoveUntil(
+                                context,
+                                MaterialPageRoute(builder: (context) => const LoginScreen()),
+                                (route) => false,
+                              );
+                            }
+                          },
+                        ),
+                      ], colorScheme),
+                      const SizedBox(height: 40),
+                      _buildFooter(colorScheme, isEn),
+                      const SizedBox(height: 20),
+                    ],
+                  ),
+                ),
               ),
-            ),
+            ],
           ),
-        ],
-      ),
+        );
+      }
     );
   }
 
-  Widget _buildHeader(double top) {
+  Widget _buildHeader(double top, ColorScheme colorScheme) {
     return Container(
       padding: EdgeInsets.only(top: top + 12, left: 16, right: 16, bottom: 16),
       decoration: BoxDecoration(
-        color: AppColors.background,
-        border: Border(bottom: BorderSide(color: Colors.white.withOpacity(0.05))),
+        color: Theme.of(context).scaffoldBackgroundColor,
+        border: Border(bottom: BorderSide(color: colorScheme.outline.withOpacity(0.1))),
       ),
       child: Row(children: [
-        const Icon(Icons.menu, color: AppColors.onSurfaceVariant, size: 24),
+        Icon(Icons.menu, color: colorScheme.onSurfaceVariant, size: 24),
         const SizedBox(width: 16),
         Text(
           'SENTINEL AI',
@@ -109,16 +142,16 @@ class _ProfileScreenState extends State<ProfileScreen> {
             fontSize: 14,
             fontWeight: FontWeight.w800,
             letterSpacing: 1.0,
-            color: AppColors.onSurface,
+            color: colorScheme.onSurface,
           ),
         ),
         const Spacer(),
-        const Icon(Icons.account_circle, color: AppColors.primary, size: 24),
+        Icon(Icons.account_circle, color: colorScheme.primary, size: 24),
       ]),
     );
   }
 
-  Widget _buildProfileInfo() {
+  Widget _buildProfileInfo(ColorScheme colorScheme) {
     final user = _authService.currentUser;
     final displayName = user?.email?.split('@').first ?? 'Người dùng Sentinel';
     final email = user?.email ?? 'Chưa cập nhật email';
@@ -133,9 +166,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
               height: 90,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                border: Border.all(color: AppColors.primaryContainer.withOpacity(0.6), width: 2),
+                border: Border.all(color: colorScheme.primaryContainer.withOpacity(0.6), width: 2),
                 boxShadow: [
-                  BoxShadow(color: AppColors.primaryContainer.withOpacity(0.15), blurRadius: 20)
+                  BoxShadow(color: colorScheme.primaryContainer.withOpacity(0.15), blurRadius: 20)
                 ],
                 image: const DecorationImage(
                   image: NetworkImage('https://i.pravatar.cc/150?img=11'),
@@ -146,11 +179,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
             Container(
               padding: const EdgeInsets.all(6),
               decoration: BoxDecoration(
-                color: AppColors.primary,
+                color: colorScheme.primary,
                 shape: BoxShape.circle,
-                border: Border.all(color: AppColors.background, width: 3),
+                border: Border.all(color: Theme.of(context).scaffoldBackgroundColor, width: 3),
               ),
-              child: const Icon(Icons.edit, size: 14, color: AppColors.onPrimary),
+              child: Icon(Icons.edit, size: 14, color: colorScheme.onPrimary),
             )
           ],
         ),
@@ -160,37 +193,27 @@ class _ProfileScreenState extends State<ProfileScreen> {
           style: GoogleFonts.inter(
             fontSize: 20,
             fontWeight: FontWeight.w700,
-            color: Colors.white,
+            color: colorScheme.onSurface,
           ),
         ),
         const SizedBox(height: 4),
-        // Text(
-        //   '+84 901 234 567', // Static placeholder for phone
-        //   style: GoogleFonts.inter(
-        //     fontSize: 12,
-        //     fontWeight: FontWeight.w500,
-        //     color: AppColors.onSurfaceVariant,
-        //   ),
-        // ),
-        // const SizedBox(height: 2),
         Text(
           email,
           style: GoogleFonts.inter(
             fontSize: 11,
-            color: AppColors.onSurfaceVariant.withOpacity(0.6),
+            color: colorScheme.onSurfaceVariant.withOpacity(0.6),
           ),
         ),
       ],
     );
   }
 
-
-  Widget _buildMenuSection(List<_MenuItem> items) {
+  Widget _buildMenuSection(List<_MenuItem> items, ColorScheme colorScheme) {
     return Container(
       decoration: BoxDecoration(
-        color: AppColors.surfaceContainerLow,
+        color: colorScheme.surfaceVariant.withOpacity(0.3),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.white.withOpacity(0.04)),
+        border: Border.all(color: colorScheme.outline.withOpacity(0.1)),
       ),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(12),
@@ -206,7 +229,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     Divider(
                       height: 1,
                       thickness: 1,
-                      color: Colors.white.withOpacity(0.04),
+                      color: colorScheme.outline.withOpacity(0.1),
                       indent: 56,
                     ),
                 ],
@@ -218,7 +241,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
-  Widget _buildFooter() {
+  Widget _buildFooter(ColorScheme colorScheme, bool isEn) {
     return Center(
       child: Column(
         children: [
@@ -227,15 +250,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
             style: GoogleFonts.inter(
               fontSize: 10,
               fontWeight: FontWeight.w600,
-              color: AppColors.onSurfaceVariant.withOpacity(0.5),
+              color: colorScheme.onSurfaceVariant.withOpacity(0.5),
             ),
           ),
           const SizedBox(height: 4),
           Text(
-            'Hệ thống giám sát an toàn thông minh',
+            isEn ? 'Smart Safety Monitoring System' : 'Hệ thống giám sát an toàn thông minh',
             style: GoogleFonts.inter(
               fontSize: 10,
-              color: AppColors.onSurfaceVariant.withOpacity(0.4),
+              color: colorScheme.onSurfaceVariant.withOpacity(0.4),
             ),
           ),
         ],
@@ -244,7 +267,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 }
 
-
 class _MenuItem extends StatelessWidget {
   final IconData icon;
   final Color iconColor;
@@ -252,6 +274,7 @@ class _MenuItem extends StatelessWidget {
   final String? subtitle;
   final Color? titleColor;
   final bool hideArrow;
+  final Widget? trailing;
   final VoidCallback? onTap;
 
   const _MenuItem({
@@ -261,11 +284,13 @@ class _MenuItem extends StatelessWidget {
     this.subtitle,
     this.titleColor,
     this.hideArrow = false,
+    this.trailing,
     this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
     return InkWell(
       onTap: onTap ?? () {},
       child: Padding(
@@ -290,7 +315,7 @@ class _MenuItem extends StatelessWidget {
                     style: GoogleFonts.inter(
                       fontSize: 14,
                       fontWeight: FontWeight.w500,
-                      color: titleColor ?? AppColors.onSurface,
+                      color: titleColor ?? colorScheme.onSurface,
                     ),
                   ),
                   if (subtitle != null) ...[
@@ -299,15 +324,16 @@ class _MenuItem extends StatelessWidget {
                       subtitle!,
                       style: GoogleFonts.inter(
                         fontSize: 11,
-                        color: AppColors.onSurfaceVariant.withOpacity(0.6),
+                        color: colorScheme.onSurfaceVariant.withOpacity(0.6),
                       ),
                     ),
                   ],
                 ],
               ),
             ),
-            if (!hideArrow)
-              Icon(Icons.chevron_right, size: 18, color: AppColors.onSurfaceVariant.withOpacity(0.5)),
+            if (trailing != null) trailing!,
+            if (!hideArrow && trailing == null)
+              Icon(Icons.chevron_right, size: 18, color: colorScheme.onSurfaceVariant.withOpacity(0.5)),
           ],
         ),
       ),

@@ -8,6 +8,8 @@ import 'package:geolocator/geolocator.dart';
 import '../services/database_service.dart';
 import 'package:traffic_detect/core/theme/app_colors.dart';
 import '../widgets/traffic_sign_icon.dart';
+import 'package:provider/provider.dart';
+import '../controllers/settings_provider.dart';
 
 class MapScreen extends StatefulWidget {
   const MapScreen({super.key});
@@ -19,6 +21,7 @@ class MapScreen extends StatefulWidget {
 class _MapScreenState extends State<MapScreen> {
   final Completer<GoogleMapController> _controller = Completer();
   final Set<Marker> _markers = {};
+  final Set<Circle> _circles = {};
   Position? _currentPosition;
   bool _isLoading = true;
   HistoryItem? _selectedItem;
@@ -185,13 +188,13 @@ class _MapScreenState extends State<MapScreen> {
         // Biển báo cấm (Nền trắng, viền đỏ)
         canvas.drawCircle(center, innerRadius, Paint()..color = Colors.white);
         canvas.drawCircle(center, innerRadius - 2, Paint()
-          ..color = Colors.red
+          ..color = const Color(0xFFE50000)
           ..style = PaintingStyle.stroke
           ..strokeWidth = 8.0);
         
         if (lowerLabel.contains('ngược chiều') || lowerLabel.contains('cấm đi ngược chiều') || lowerLabel.contains('cấm đường cấm')) {
           // Biển cấm đi ngược chiều (Nền đỏ, thanh trắng nằm ngang)
-          canvas.drawCircle(center, innerRadius - 2, Paint()..color = Colors.red);
+          canvas.drawCircle(center, innerRadius - 2, Paint()..color = const Color(0xFFE50000));
           canvas.drawRect(
             Rect.fromCenter(center: center, width: innerRadius * 1.3, height: innerRadius * 0.35),
             Paint()..color = Colors.white,
@@ -211,7 +214,7 @@ class _MapScreenState extends State<MapScreen> {
             }
           }
           octagon.close();
-          canvas.drawPath(octagon, Paint()..color = Colors.red);
+          canvas.drawPath(octagon, Paint()..color = const Color(0xFFE50000));
           
           final TextPainter tp = TextPainter(textDirection: TextDirection.ltr);
           tp.text = const TextSpan(
@@ -245,7 +248,7 @@ class _MapScreenState extends State<MapScreen> {
             Offset(radius - innerRadius * 0.5, circleY - innerRadius * 0.5),
             Offset(radius + innerRadius * 0.5, circleY + innerRadius * 0.5),
             Paint()
-              ..color = Colors.red
+              ..color = const Color(0xFFE50000)
               ..strokeWidth = 6.0,
           );
         }
@@ -260,7 +263,7 @@ class _MapScreenState extends State<MapScreen> {
           ..close();
         canvas.drawPath(triangle, Paint()..color = const Color(0xFFFFCC00));
         canvas.drawPath(triangle, Paint()
-          ..color = Colors.red
+          ..color = const Color(0xFFE50000)
           ..style = PaintingStyle.stroke
           ..strokeWidth = 5.0);
           
@@ -277,7 +280,7 @@ class _MapScreenState extends State<MapScreen> {
         tp.paint(canvas, Offset(radius - tp.width / 2, circleY - tp.height / 1.7));
       } else if (lowerLabel.contains('chỉ được') || lowerLabel.contains('tốc độ tối thiểu') || lowerLabel.contains('vòng xuyến') || lowerLabel.contains('hướng phải đi')) {
         // Biển hiệu lệnh (Tròn xanh lam, mũi tên trắng hướng đi)
-        canvas.drawCircle(center, innerRadius, Paint()..color = Colors.blue.shade700);
+        canvas.drawCircle(center, innerRadius, Paint()..color = const Color(0xFF00539F));
         canvas.drawCircle(center, innerRadius - 2, Paint()
           ..color = Colors.white
           ..style = PaintingStyle.stroke
@@ -320,7 +323,7 @@ class _MapScreenState extends State<MapScreen> {
         final double rectSize = innerRadius * 1.3;
         canvas.drawRect(
           Rect.fromCenter(center: center, width: rectSize, height: rectSize),
-          Paint()..color = Colors.blue.shade600,
+          Paint()..color = const Color(0xFF00539F),
         );
         canvas.drawRect(
           Rect.fromCenter(center: center, width: rectSize - 4, height: rectSize - 4),
@@ -360,6 +363,49 @@ class _MapScreenState extends State<MapScreen> {
   Future<void> _loadHistoryMarkers() async {
     final history = await DatabaseService().getDetectionHistory();
 
+    // Heatmap clustering logic
+    final unvisited = List<HistoryItem>.from(history);
+    final clusters = <_HeatmapCluster>[];
+
+    while (unvisited.isNotEmpty) {
+      final current = unvisited.removeLast();
+      final clusterItems = [current];
+      
+      for (int i = unvisited.length - 1; i >= 0; i--) {
+        final other = unvisited[i];
+        final distance = Geolocator.distanceBetween(
+          current.latitude, current.longitude,
+          other.latitude, other.longitude,
+        );
+        if (distance <= 10.0) {
+          clusterItems.add(other);
+          unvisited.removeAt(i);
+        }
+      }
+      clusters.add(_HeatmapCluster(clusterItems));
+    }
+
+    final newCircles = <Circle>{};
+    for (int i = 0; i < clusters.length; i++) {
+      final cluster = clusters[i];
+      if (cluster.items.length >= 3) {
+        final dominantLabel = cluster.dominantLabel;
+        final signInfo = _parseSignType(dominantLabel);
+        
+        newCircles.add(
+          Circle(
+            circleId: CircleId('heat_$i'),
+            center: LatLng(cluster.avgLat, cluster.avgLng),
+            radius: 12.0,
+            fillColor: signInfo.badgeColor.withOpacity(0.4),
+            strokeWidth: 2,
+            strokeColor: signInfo.badgeColor.withOpacity(0.8),
+            zIndex: 1,
+          ),
+        );
+      }
+    }
+
     // Build all markers in parallel to avoid blocking Google Maps tile threads
     final markerFutures = history.map((item) async {
       final signInfo = _parseSignType(item.label);
@@ -391,6 +437,9 @@ class _MapScreenState extends State<MapScreen> {
       _markers
         ..clear()
         ..addAll(newMarkers);
+      _circles
+        ..clear()
+        ..addAll(newCircles);
       if (_selectedItem != null &&
           !history.any((item) => item.id == _selectedItem!.id)) {
         _selectedItem = null;
@@ -415,10 +464,11 @@ class _MapScreenState extends State<MapScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final isEn = context.watch<SettingsProvider>().isEnglish;
     if (_isLoading) {
-      return const Scaffold(
-        backgroundColor: AppColors.background,
-        body: Center(child: CircularProgressIndicator(color: AppColors.primary)),
+      return Scaffold(
+        backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+        body: const Center(child: CircularProgressIndicator(color: AppColors.primary)),
       );
     }
 
@@ -431,13 +481,14 @@ class _MapScreenState extends State<MapScreen> {
     );
 
     return Scaffold(
-      backgroundColor: AppColors.background,
+      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
       body: Stack(
         children: [
           GoogleMap(
             initialCameraPosition: initialCameraPosition,
             onMapCreated: (controller) => _controller.complete(controller),
             markers: _markers,
+            circles: _circles,
             myLocationEnabled: true,
             myLocationButtonEnabled: false,
             zoomControlsEnabled: false,
@@ -481,21 +532,21 @@ class _MapScreenState extends State<MapScreen> {
                     child: const Icon(Icons.map_outlined, color: AppColors.primary),
                   ),
                   const SizedBox(width: 16),
-                  const Expanded(
+                  Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          'Bản đồ Biển báo',
-                          style: TextStyle(
+                          isEn ? 'Sign Map' : 'Bản đồ Biển báo',
+                          style: const TextStyle(
                             fontSize: 22,
                             fontWeight: FontWeight.w700,
                             color: Colors.white,
                           ),
                         ),
                         Text(
-                          'Các biển báo đã thu thập',
-                          style: TextStyle(
+                          isEn ? 'Collected signs' : 'Các biển báo đã thu thập',
+                          style: const TextStyle(
                             fontSize: 13,
                             color: AppColors.onSurfaceVariant,
                           ),
@@ -529,8 +580,8 @@ class _MapScreenState extends State<MapScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text(
-                    'Chú giải biển báo',
+                  Text(
+                    isEn ? 'Map Legend' : 'Chú giải biển báo',
                     style: TextStyle(
                       fontSize: 12,
                       fontWeight: FontWeight.w700,
@@ -538,13 +589,13 @@ class _MapScreenState extends State<MapScreen> {
                     ),
                   ),
                   const SizedBox(height: 8),
-                  _buildLegendItem(Colors.redAccent, 'Biển cấm (Đỏ)'),
+                  _buildLegendItem(Colors.redAccent, isEn ? 'Prohibition (Red)' : 'Biển cấm (Đỏ)'),
                   const SizedBox(height: 6),
-                  _buildLegendItem(Colors.orangeAccent, 'Nguy hiểm (Cam)'),
+                  _buildLegendItem(Colors.orangeAccent, isEn ? 'Warning (Orange)' : 'Nguy hiểm (Cam)'),
                   const SizedBox(height: 6),
-                  _buildLegendItem(Colors.blueAccent, 'Hiệu lệnh / Chỉ dẫn (Xanh)'),
+                  _buildLegendItem(Colors.blueAccent, isEn ? 'Mandatory/Info (Blue)' : 'Hiệu lệnh / Chỉ dẫn (Xanh)'),
                   const SizedBox(height: 6),
-                  _buildLegendItem(Colors.purpleAccent, 'Hết cấm (Tím/Xám)'),
+                  _buildLegendItem(Colors.purpleAccent, isEn ? 'End restriction (Gray)' : 'Hết cấm (Tím/Xám)'),
                 ],
               ),
             ),
@@ -572,7 +623,7 @@ class _MapScreenState extends State<MapScreen> {
               left: 16,
               right: 16,
               bottom: 100, // Above the bottom nav bar gap
-              child: _buildInfoCard(_selectedItem!),
+              child: _buildInfoCard(_selectedItem!, isEn),
             ),
         ],
       ),
@@ -605,7 +656,7 @@ class _MapScreenState extends State<MapScreen> {
     );
   }
 
-  Widget _buildInfoCard(HistoryItem item) {
+  Widget _buildInfoCard(HistoryItem item, bool isEn) {
     final signInfo = _parseSignType(item.label);
     return TweenAnimationBuilder<double>(
       tween: Tween(begin: 0.0, end: 1.0),
@@ -641,7 +692,7 @@ class _MapScreenState extends State<MapScreen> {
               width: 64,
               height: 64,
               decoration: BoxDecoration(
-                color: AppColors.background,
+                color: Theme.of(context).scaffoldBackgroundColor,
                 borderRadius: BorderRadius.circular(12),
               ),
               child: item.imageBytes != null
@@ -656,6 +707,7 @@ class _MapScreenState extends State<MapScreen> {
                       child: TrafficSignIcon(
                         label: item.label,
                         size: 40,
+                        isEn: isEn,
                       ),
                     ),
             ),
@@ -699,7 +751,7 @@ class _MapScreenState extends State<MapScreen> {
                   ),
                   const SizedBox(height: 6),
                   Text(
-                    'Đặc điểm: ${signInfo.shapeDesc}',
+                    '${isEn ? 'Feature:' : 'Đặc điểm:'} ${signInfo.shapeDesc}',
                     style: const TextStyle(
                       fontSize: 12,
                       color: AppColors.onSurfaceVariant,
@@ -773,5 +825,21 @@ _SignTypeInfo _parseSignType(String label) {
     return _SignTypeInfo('Hết hiệu lệnh cấm', 'Hình tròn, viền đen, gạch chéo', Colors.grey, Icons.not_interested, BitmapDescriptor.hueViolet);
   } else {
     return _SignTypeInfo('Biển chỉ dẫn', 'Hình vuông/chữ nhật, nền xanh', AppColors.primary, Icons.map, BitmapDescriptor.hueCyan);
+  }
+}
+
+class _HeatmapCluster {
+  final List<HistoryItem> items;
+  _HeatmapCluster(this.items);
+
+  double get avgLat => items.map((e) => e.latitude).reduce((a, b) => a + b) / items.length;
+  double get avgLng => items.map((e) => e.longitude).reduce((a, b) => a + b) / items.length;
+
+  String get dominantLabel {
+    final counts = <String, int>{};
+    for (final item in items) {
+      counts[item.label] = (counts[item.label] ?? 0) + 1;
+    }
+    return counts.entries.reduce((a, b) => a.value > b.value ? a : b).key;
   }
 }

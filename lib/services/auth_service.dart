@@ -79,4 +79,28 @@ class AuthService {
       rethrow;
     }
   }
+
+  Future<void> verifyOTPAndResetPassword(String email, String otp, String newPassword) async {
+    try {
+      final response = await _supabase.auth.verifyOTP(
+        email: email,
+        token: otp,
+        type: OtpType.recovery,
+      );
+      
+      if (response.session != null) {
+        await _supabase.auth.updateUser(
+          UserAttributes(password: newPassword),
+        );
+      } else {
+        throw const AuthException('Không thể tạo phiên khôi phục bảo mật. Vui lòng thử lại!');
+      }
+    } on AuthException catch (e) {
+      debugPrint('Verify OTP Error: ${e.message}');
+      rethrow;
+    } catch (e) {
+      debugPrint('Verify OTP Error: $e');
+      rethrow;
+    }
+  }
 }

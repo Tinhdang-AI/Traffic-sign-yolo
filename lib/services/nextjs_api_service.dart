@@ -160,15 +160,17 @@ class NestJsApiService {
     required double longitude,
     required double confidence,
     required String detectionType,
-    Map<String, dynamic>? metadata,
+    String? description,
+    String? imageUrl,
   }) async {
     try {
-      return await _apiService.post('/detections/history', {
+      return await _apiService.post('/history', {
         'latitude': latitude,
         'longitude': longitude,
-        'confidence': confidence,
         'detectionType': detectionType,
-        if (metadata != null) 'metadata': metadata,
+        if (description != null) 'description': description,
+        if (imageUrl != null) 'imageUrl': imageUrl,
+        'confidence': confidence,
       });
     } catch (e) {
       debugPrint('Record detection error: $e');
@@ -182,7 +184,7 @@ class NestJsApiService {
   }) async {
     try {
       return await _apiService.get(
-        '/detections/history?limit=$limit&offset=$offset',
+        '/history?limit=$limit&offset=$offset',
       );
     } catch (e) {
       debugPrint('Get detection history error: $e');

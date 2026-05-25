@@ -3,7 +3,8 @@ import 'package:http/http.dart' as http;
 import 'dart:convert';
 
 class ApiService {
-  static const String baseUrl = 'http://localhost:3000/api/v1';
+  // Use computer's local Wi-Fi IP instead of localhost so physical phones/emulators can reach the backend
+  static const String baseUrl = 'http://192.168.1.109:3000/api/v1';
   static const Duration timeout = Duration(seconds: 30);
 
   final http.Client _httpClient;

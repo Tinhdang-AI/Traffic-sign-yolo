@@ -11,7 +11,7 @@ import '../models/detection_result.dart';
 import '../services/database_service.dart';
 
 class DetectionProvider extends ChangeNotifier {
-  static const int _stableFrameThreshold = 2;
+  static const int _stableFrameThreshold = 0;
   static const double _stableConfidenceThreshold = 0.80;
   static const double _confidenceSmoothingFactor = 0.35;
 
@@ -68,8 +68,8 @@ class DetectionProvider extends ChangeNotifier {
       _isInitialized = true;
       notifyListeners();
 
-      _detectionTimer = Timer.periodic(const Duration(milliseconds: 200), (_) {
-        _processFrame();
+      await _cameraController!.startImageStream((CameraImage image) {
+        _processFrameFromStream(image);
       });
     } catch (e) {
       debugPrint('🎤 [Camera/Model] Init Error: $e');
@@ -127,27 +127,22 @@ class DetectionProvider extends ChangeNotifier {
       await _cameraController!.initialize();
       notifyListeners();
 
-      _detectionTimer = Timer.periodic(const Duration(milliseconds: 200), (_) {
-        _processFrame();
+      await _cameraController!.startImageStream((CameraImage image) {
+        _processFrameFromStream(image);
       });
     } catch (e) {
       debugPrint('🎤 [Camera/Model] Init Error: $e');
     }
   }
 
-  Future<void> _processFrame() async {
+  Future<void> _processFrameFromStream(CameraImage image) async {
     if (_isProcessing || _cameraController == null || !_cameraController!.value.isInitialized) {
       return;
     }
 
     _isProcessing = true;
     try {
-      final file = await _cameraController!.takePicture();
-      final bytes = await file.readAsBytes();
-
-      try {
-        File(file.path).deleteSync();
-      } catch (_) {}
+      final bytes = image.planes[0].bytes;
 
       final results = await DetectionService.instance.detect(bytes);
       final stabilized = _stabilizeDetections(results);
@@ -299,7 +294,6 @@ class DetectionProvider extends ChangeNotifier {
 
   @override
   void dispose() {
-    _detectionTimer?.cancel();
     _positionSubscription?.cancel();
     LocationService.instance.stopTracking();
     _cameraController?.dispose();

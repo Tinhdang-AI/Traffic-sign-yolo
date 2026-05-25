@@ -3,6 +3,8 @@ import 'dart:io';
 import 'package:flutter/services.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 
+import '../services/traffic_rule_engine.dart';
+
 class VoiceGuidanceService {
   static final VoiceGuidanceService _instance =
       VoiceGuidanceService._internal();
@@ -169,7 +171,7 @@ class VoiceGuidanceService {
   }
 
   /// Announce traffic sign warning
-  Future<void> speakTrafficSign(String signLabel) async {
+  Future<void> speakTrafficSign(String signLabel, {bool isEn = false}) async {
     if (!_isInitialized) await init();
 
     print('🎤 [TTS] Request to speak: $signLabel');
@@ -180,8 +182,34 @@ class VoiceGuidanceService {
 
     try {
       _isSpeaking = true;
-      print('🎤 [TTS] Speaking: Chú ý biển báo: $signLabel');
-      await _tts.speak('Chú ý biển báo: $signLabel', focus: Platform.isAndroid);
+      String message = isEn ? 'Warning: $signLabel' : 'Chú ý biển báo: $signLabel';
+      
+      final lower = signLabel.toLowerCase();
+      final currentLimit = TrafficRuleEngine.instance.currentState.activeSpeedLimit;
+      
+      if (lower.contains('khu vực đông dân cư') && !lower.contains('ngoài')) {
+        message = isEn 
+            ? 'Entering populated area. Maximum speed ${currentLimit ?? 60} km/h.'
+            : 'Bắt đầu khu đông dân cư. Tốc độ tối đa ${currentLimit ?? 60} kilômét trên giờ.';
+      } else if (lower.contains('ngoài khu vực đông dân cư')) {
+        message = isEn
+            ? 'Leaving populated area. Maximum speed ${currentLimit ?? 90} km/h.'
+            : 'Hết khu đông dân cư. Tốc độ tối đa ${currentLimit ?? 90} kilômét trên giờ.';
+      } else if (lower.contains('tốc độ tối đa') && !lower.contains('hết')) {
+        final match = RegExp(r'\d+').firstMatch(lower);
+        if (match != null) {
+          message = isEn 
+              ? 'Speed limit ${match.group(0)} km/h.'
+              : 'Giới hạn tốc độ ${match.group(0)} kilômét trên giờ.';
+        }
+      } else if (lower.contains('hết tốc độ tối đa')) {
+        message = isEn
+            ? 'End of speed limit. Current maximum speed is ${currentLimit ?? 60} km/h.'
+            : 'Hết giới hạn tốc độ. Tốc độ tối đa hiện tại là ${currentLimit ?? 60} kilômét trên giờ.';
+      }
+
+      print('🎤 [TTS] Speaking: $message');
+      await _tts.speak(message, focus: Platform.isAndroid);
       _isSpeaking = false;
     } catch (e) {
       print('🎤 [TTS] Error speaking traffic sign: $e');
