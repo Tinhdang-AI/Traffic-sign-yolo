@@ -5,14 +5,15 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:camera/camera.dart';
 import 'package:geolocator/geolocator.dart';
-import '../theme/app_colors.dart';
+import '../core/theme/app_colors.dart';
 import '../services/detection_service.dart';
 import '../services/location_service.dart';
 import '../services/voice_guidance_service.dart';
+import '../services/nextjs_api_service.dart';
 import '../models/detection_result.dart';
 import '../widgets/traffic_sign_icon.dart';
 import '../widgets/confidence_badge.dart';
-import '../services/history_service.dart';
+import '../services/database_service.dart';
 
 class ARDetectionScreen extends StatefulWidget {
   const ARDetectionScreen({super.key});
@@ -27,14 +28,15 @@ class _ARDetectionScreenState extends State<ARDetectionScreen>
   late final AnimationController _waveCtrl;
   late final Animation<double> _pulse;
 
-  static const int _stableFrameThreshold = 2;
-  static const double _stableConfidenceThreshold = 0.80;
-  static const double _confidenceSmoothingFactor = 0.35;
+  static const int _stableFrameThreshold = 1;
+  static const double _stableConfidenceThreshold = 0.65;
+  static const double _confidenceSmoothingFactor = 0.50;
 
   CameraController? _cameraController;
   Timer? _detectionTimer;
   List<DetectionResult> _detections = [];
   bool _isProcessing = false;
+  bool _isReporting = false;
   Position? _currentPosition;
   double _currentSpeed = 0.0;
   StreamSubscription<Position>? _positionSubscription;
@@ -43,6 +45,10 @@ class _ARDetectionScreenState extends State<ARDetectionScreen>
 
   // Voice Guidance switch
   bool _voiceEnabled = true;
+
+  // Continuous Scan switch
+  bool _isScanContinuous = true;
+
   String? _activeSpeedLimit;
 
   // TTS Cooldowns per label to prevent spamming
@@ -50,6 +56,9 @@ class _ARDetectionScreenState extends State<ARDetectionScreen>
 
   // History saving cooldowns per label
   final Map<String, DateTime> _lastSavedHistory = {};
+
+  // API service
+  final _apiService = NestJsApiService();
 
   @override
   void initState() {
@@ -132,7 +141,9 @@ class _ARDetectionScreenState extends State<ARDetectionScreen>
       if (!mounted) return;
       setState(() {});
 
-      // Periodically process camera frames
+      // Periodically process camera frames.
+      // 200ms (~5fps) is safe for Samsung A02 (ARM 32-bit) — takePicture()
+      // alone takes 100-300ms, so 50ms would cause queued requests to pile up.
       _detectionTimer = Timer.periodic(const Duration(milliseconds: 200), (_) {
         _processFrame();
       });
@@ -142,7 +153,8 @@ class _ARDetectionScreenState extends State<ARDetectionScreen>
   }
 
   Future<void> _processFrame() async {
-    if (_isProcessing ||
+    if (!_isScanContinuous ||
+        _isProcessing ||
         _cameraController == null ||
         !_cameraController!.value.isInitialized) {
       return;
@@ -224,20 +236,43 @@ class _ARDetectionScreenState extends State<ARDetectionScreen>
     }
   }
 
-  String _getMockLocationName(double lat, double lng) {
-    final spots = [
-      'Quốc lộ 20, Liên Nghĩa, Đức Trọng',
-      'Đường ĐT725, Tà Nung, Đà Lạt',
-      'Quốc lộ 27, Lương Sơn, Xã Lâm Sơn',
-      'Đoạn tránh QL20, Liên Nghĩa, Đức Trọng',
-      'Đường Ba Tháng Hai, Phường 1, Đà Lạt',
-      'Đường Trần Hưng Đạo, Phường 10, Đà Lạt',
-      'Đoạn đèo Prenn, Phường 3, Đà Lạt',
-      'Quốc lộ 20, Định An, Hiệp An, Đức Trọng',
-    ];
-    final index = ((lat.abs() + lng.abs()) * 1000).toInt() % spots.length;
-    return spots[index];
+  Future<void> _reportDetection(DetectionResult detection) async {
+    if (_currentPosition == null) {
+      // ApiErrorHandler.showErrorSnackBar(
+      //   context,
+      //   'Location not available',
+      // );
+      return;
+    }
+
+    setState(() => _isReporting = true);
+    try {
+      await _apiService.createReport(
+        name: 'AR Detection - ${detection.label}',
+        latitude: _currentPosition!.latitude,
+        longitude: _currentPosition!.longitude,
+        violationType: _mapDetectionToViolationType(detection.label),
+        description:
+            'Detected via AR Camera with ${(_displayConfidence(detection.label, detection.confidence) * 100).toInt()}% confidence',
+      );
+
+    } finally {
+      if (mounted) {
+        setState(() => _isReporting = false);
+      }
+    }
   }
+
+  String _mapDetectionToViolationType(String label) {
+    final lower = label.toLowerCase();
+    if (lower.contains('tốc độ')) return 'speed_limit';
+    if (lower.contains('cấm')) return 'prohibition';
+    if (lower.contains('chiều')) return 'direction';
+    if (lower.contains('dừng') || lower.contains('stop')) return 'stop';
+    if (lower.contains('nhường')) return 'yield';
+    return 'other';
+  }
+
 
   Future<void> _saveDetectionsToHistory(List<DetectionResult> detections) async {
     final now = DateTime.now();
@@ -264,14 +299,12 @@ class _ARDetectionScreenState extends State<ARDetectionScreen>
       }
     }
 
-    if (locationName.isEmpty) {
+    if (locationName.isEmpty || locationName == "Đang kết nối GPS...") {
       try {
         locationName = await LocationService.instance.getAddressFromCoordinates(lat, lng);
       } catch (_) {}
-
-      // Nếu không có mạng hoặc lỗi geocoding, dùng tên đường giả lập tiếng Việt chất lượng cao
-      if (locationName.isEmpty) {
-        locationName = _getMockLocationName(lat, lng);
+      if (locationName.isEmpty || locationName.startsWith('Tọa độ')) {
+        locationName = LocationService.getMockLocationNameStatic(lat, lng);
       }
     }
 
@@ -280,7 +313,7 @@ class _ARDetectionScreenState extends State<ARDetectionScreen>
       if (lastSaved == null || now.difference(lastSaved) > const Duration(seconds: 15)) {
         _lastSavedHistory[d.label] = now;
         
-        await HistoryService().addDetection(
+        await DatabaseService().addDetectionHistory(
           label: d.label,
           confidence: _displayConfidence(d.label, d.confidence),
           latitude: lat,
@@ -349,7 +382,6 @@ class _ARDetectionScreenState extends State<ARDetectionScreen>
     _positionSubscription?.cancel();
     LocationService.instance.stopTracking();
     _cameraController?.dispose();
-    DetectionService.instance.dispose();
     _pulseCtrl.dispose();
     _waveCtrl.dispose();
     super.dispose();
@@ -412,14 +444,17 @@ class _ARDetectionScreenState extends State<ARDetectionScreen>
           // AR scanning corners and target crosshair
           Positioned.fill(
             child: CustomPaint(
-              painter: _ScanningOverlayPainter(pulseValue: _pulse.value),
+              painter: _ScanningOverlayPainter(
+                pulseValue: _isScanContinuous ? _pulse.value : 0.5,
+                isScanning: _isScanContinuous,
+              ),
             ),
           ),
 
           // 2. Dynamic Target bounding boxes
-          ..._detections.map((d) {
-            final left = d.boundingBox.left * size.width;
-            final topBox = d.boundingBox.top * size.height;
+          if (_isScanContinuous) ..._detections.map((d) {
+            final left = d.left * size.width;
+            final topBox = d.top * size.height;
             return Positioned(
               left: left,
               top: topBox,
@@ -437,7 +472,7 @@ class _ARDetectionScreenState extends State<ARDetectionScreen>
           _buildHeader(top),
 
           // 4. Warning alerts at top center (displays all stabilized warnings)
-          if (_detections.isNotEmpty)
+          if (_isScanContinuous && _detections.isNotEmpty)
             Positioned(
               top: top + kToolbarHeight + 16,
               left: 16,
@@ -466,17 +501,54 @@ class _ARDetectionScreenState extends State<ARDetectionScreen>
             ),
           ),
 
-          // 6. Right voice toggle card HUD
+          // 5.5 Report Detection button (when detection exists)
+          if (_detections.isNotEmpty && !_isReporting)
+            Positioned(
+              left: 16,
+              bottom: 40,
+              child: ElevatedButton.icon(
+                onPressed: () => _reportDetection(_detections.first),
+                icon: Icon(Icons.send, size: 18),
+                label: Text('Báo cáo'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.red.shade600,
+                  foregroundColor: Colors.white,
+                  padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                ),
+              ),
+            ),
+
+          // 6. Right toggle cards HUD
           Positioned(
             right: 16,
             bottom: 120,
-            child: _VoiceHUD(
-              enabled: _voiceEnabled,
-              onChanged: (val) {
-                setState(() {
-                  _voiceEnabled = val;
-                });
-              },
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                _ToggleHUD(
+                  title: 'QUÉT LIÊN TỤC',
+                  enabled: _isScanContinuous,
+                  onChanged: (val) {
+                    setState(() {
+                      _isScanContinuous = val;
+                      if (!val) {
+                        _detections.clear(); // Clear boxes when paused
+                      }
+                    });
+                  },
+                ),
+                const SizedBox(height: 12),
+                _ToggleHUD(
+                  title: 'ĐỌC BIỂN BÁO',
+                  enabled: _voiceEnabled,
+                  onChanged: (val) {
+                    setState(() {
+                      _voiceEnabled = val;
+                    });
+                  },
+                ),
+              ],
             ),
           ),
 
@@ -488,7 +560,10 @@ class _ARDetectionScreenState extends State<ARDetectionScreen>
             child: Center(
               child: AnimatedBuilder(
                 animation: _waveCtrl,
-                builder: (_, __) => _VoiceWave(t: _waveCtrl.value),
+                builder: (_, __) => _VoiceWave(
+                  t: _waveCtrl.value,
+                  isScanning: _isScanContinuous,
+                ),
               ),
             ),
           ),
@@ -709,10 +784,12 @@ class _SpeedHUD extends StatelessWidget {
   }
 }
 
-class _VoiceHUD extends StatelessWidget {
+class _ToggleHUD extends StatelessWidget {
+  final String title;
   final bool enabled;
   final ValueChanged<bool> onChanged;
-  const _VoiceHUD({
+  const _ToggleHUD({
+    required this.title,
     required this.enabled,
     required this.onChanged,
   });
@@ -727,7 +804,7 @@ class _VoiceHUD extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             Text(
-              'ĐỌC BIỂN BÁO',
+              title,
               style: GoogleFonts.inter(
                 fontSize: 8,
                 fontWeight: FontWeight.w800,
@@ -755,7 +832,7 @@ class _VoiceHUD extends StatelessWidget {
                     child: Switch(
                       value: enabled,
                       onChanged: onChanged,
-                      activeColor: AppColors.primary,
+                      activeThumbColor: AppColors.primary,
                       activeTrackColor: AppColors.primary.withOpacity(0.3),
                       inactiveThumbColor: Colors.white54,
                       inactiveTrackColor: Colors.white10,
@@ -773,7 +850,8 @@ class _VoiceHUD extends StatelessWidget {
 
 class _VoiceWave extends StatelessWidget {
   final double t;
-  const _VoiceWave({required this.t});
+  final bool isScanning;
+  const _VoiceWave({required this.t, this.isScanning = true});
 
   @override
   Widget build(BuildContext context) {
@@ -790,12 +868,12 @@ class _VoiceWave extends StatelessWidget {
             border: Border.all(color: Colors.white.withOpacity(0.06)),
           ),
           child: Text(
-            '"Đang quét các mối nguy hiểm..."',
+            isScanning ? '"Đang quét các mối nguy hiểm..."' : '"Đã tạm dừng quét"',
             style: GoogleFonts.inter(
               fontSize: 9.5,
               fontWeight: FontWeight.w700,
               letterSpacing: 0.8,
-              color: AppColors.primary,
+              color: isScanning ? AppColors.primary : Colors.white54,
             ),
           ),
         ),
@@ -810,11 +888,11 @@ class _VoiceWave extends StatelessWidget {
               padding: const EdgeInsets.symmetric(horizontal: 2.0),
               child: Container(
                 width: 4.5,
-                height: h,
+                height: isScanning ? h : 6.0,
                 decoration: BoxDecoration(
-                  color: AppColors.primary.withOpacity(opacs[i]),
+                  color: (isScanning ? AppColors.primary : Colors.white54).withOpacity(opacs[i]),
                   borderRadius: BorderRadius.circular(3),
-                  boxShadow: i == 3
+                  boxShadow: i == 3 && isScanning
                       ? [
                           BoxShadow(
                             color: AppColors.primary.withOpacity(0.55),
@@ -973,12 +1051,14 @@ class _AlertWarning extends StatelessWidget {
 
 class _ScanningOverlayPainter extends CustomPainter {
   final double pulseValue;
-  _ScanningOverlayPainter({required this.pulseValue});
+  final bool isScanning;
+  _ScanningOverlayPainter({required this.pulseValue, this.isScanning = true});
 
   @override
   void paint(Canvas canvas, Size size) {
+    final baseColor = isScanning ? AppColors.primary : Colors.white54;
     final crossPaint = Paint()
-      ..color = AppColors.primary.withOpacity(0.35 * pulseValue)
+      ..color = baseColor.withOpacity(isScanning ? (0.35 * pulseValue) : 0.2)
       ..strokeWidth = 1.5;
 
     final double w = size.width;
@@ -988,7 +1068,7 @@ class _ScanningOverlayPainter extends CustomPainter {
     final double pad = 40.0;
     final double bracketLen = 24.0;
     final cornerPaint = Paint()
-      ..color = AppColors.primary.withOpacity(0.6 * pulseValue)
+      ..color = baseColor.withOpacity(isScanning ? (0.6 * pulseValue) : 0.3)
       ..strokeWidth = 2.5
       ..style = PaintingStyle.stroke;
 
@@ -1035,11 +1115,11 @@ class _ScanningOverlayPainter extends CustomPainter {
     canvas.drawLine(Offset(cx + 5, cy), Offset(cx + 15, cy), crossPaint);
     canvas.drawLine(Offset(cx, cy - 15), Offset(cx, cy - 5), crossPaint);
     canvas.drawLine(Offset(cx, cy + 5), Offset(cx, cy + 15), crossPaint);
-    canvas.drawCircle(Offset(cx, cy), 2, Paint()..color = AppColors.primary);
+    canvas.drawCircle(Offset(cx, cy), 2, Paint()..color = baseColor.withOpacity(isScanning ? 1.0 : 0.5));
   }
 
   @override
   bool shouldRepaint(covariant _ScanningOverlayPainter oldDelegate) {
-    return oldDelegate.pulseValue != pulseValue;
+    return oldDelegate.pulseValue != pulseValue || oldDelegate.isScanning != isScanning;
   }
 }

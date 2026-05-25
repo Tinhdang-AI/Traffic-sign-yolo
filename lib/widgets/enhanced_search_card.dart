@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../services/autocomplete_service.dart';
 import '../services/location_storage_service.dart';
-import '../theme/app_colors.dart';
+import 'package:traffic_detect/core/theme/app_colors.dart';
 
 class EnhancedSearchCard extends StatefulWidget {
   final TextEditingController controller;

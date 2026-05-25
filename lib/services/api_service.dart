@@ -1,0 +1,143 @@
+import 'package:flutter/foundation.dart';
+import 'package:http/http.dart' as http;
+import 'dart:convert';
+
+class ApiService {
+  static const String baseUrl = 'http://localhost:3000/api/v1';
+  static const Duration timeout = Duration(seconds: 30);
+
+  final http.Client _httpClient;
+
+  ApiService({http.Client? httpClient})
+    : _httpClient = httpClient ?? http.Client();
+
+  String? _token;
+
+  void setToken(String? token) {
+    _token = token;
+  }
+
+  Map<String, String> _buildHeaders() {
+    final headers = <String, String>{
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+    };
+    if (_token != null) {
+      headers['Authorization'] = 'Bearer $_token';
+    }
+    return headers;
+  }
+
+  Future<dynamic> get(String endpoint) async {
+    try {
+      final uri = Uri.parse('$baseUrl$endpoint');
+      final response = await _httpClient
+          .get(uri, headers: _buildHeaders())
+          .timeout(timeout);
+
+      return _handleResponse(response);
+    } catch (e) {
+      debugPrint('GET $endpoint Error: $e');
+      rethrow;
+    }
+  }
+
+  Future<dynamic> post(String endpoint, Map<String, dynamic> data) async {
+    try {
+      final uri = Uri.parse('$baseUrl$endpoint');
+      final response = await _httpClient
+          .post(
+            uri,
+            headers: _buildHeaders(),
+            body: jsonEncode(data),
+          )
+          .timeout(timeout);
+
+      return _handleResponse(response);
+    } catch (e) {
+      debugPrint('POST $endpoint Error: $e');
+      rethrow;
+    }
+  }
+
+  Future<dynamic> patch(String endpoint, Map<String, dynamic> data) async {
+    try {
+      final uri = Uri.parse('$baseUrl$endpoint');
+      final response = await _httpClient
+          .patch(
+            uri,
+            headers: _buildHeaders(),
+            body: jsonEncode(data),
+          )
+          .timeout(timeout);
+
+      return _handleResponse(response);
+    } catch (e) {
+      debugPrint('PATCH $endpoint Error: $e');
+      rethrow;
+    }
+  }
+
+  Future<dynamic> put(String endpoint, Map<String, dynamic> data) async {
+    try {
+      final uri = Uri.parse('$baseUrl$endpoint');
+      final response = await _httpClient
+          .put(
+            uri,
+            headers: _buildHeaders(),
+            body: jsonEncode(data),
+          )
+          .timeout(timeout);
+
+      return _handleResponse(response);
+    } catch (e) {
+      debugPrint('PUT $endpoint Error: $e');
+      rethrow;
+    }
+  }
+
+  Future<dynamic> delete(String endpoint) async {
+    try {
+      final uri = Uri.parse('$baseUrl$endpoint');
+      final response = await _httpClient
+          .delete(uri, headers: _buildHeaders())
+          .timeout(timeout);
+
+      return _handleResponse(response);
+    } catch (e) {
+      debugPrint('DELETE $endpoint Error: $e');
+      rethrow;
+    }
+  }
+
+  dynamic _handleResponse(http.Response response) {
+    try {
+      final body = response.body;
+      final decoded = body.isNotEmpty ? jsonDecode(body) : null;
+
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        return decoded;
+      }
+
+      final errorMsg = decoded?['message'] ?? 'API Error';
+      throw ApiException(
+        statusCode: response.statusCode,
+        message: errorMsg,
+      );
+    } catch (e) {
+      if (e is ApiException) rethrow;
+      debugPrint('Response parsing error: $e');
+      rethrow;
+    }
+  }
+}
+
+class ApiException implements Exception {
+  final int statusCode;
+  final String message;
+
+  ApiException({required this.statusCode, required this.message});
+
+  @override
+  String toString() => 'ApiException($statusCode): $message';
+}

@@ -1,7 +1,7 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
-import '../theme/app_colors.dart';
+import 'package:traffic_detect/core/theme/app_colors.dart';
 
 class VoiceSettingsScreen extends StatefulWidget {
   const VoiceSettingsScreen({super.key});

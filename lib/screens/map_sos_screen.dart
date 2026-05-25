@@ -1,9 +1,13 @@
 import 'dart:async';
+import 'dart:math';
+import 'dart:typed_data';
+import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:geolocator/geolocator.dart';
-import '../services/history_service.dart';
-import '../theme/app_colors.dart';
+import '../services/database_service.dart';
+import 'package:traffic_detect/core/theme/app_colors.dart';
+import '../widgets/traffic_sign_icon.dart';
 
 class MapScreen extends StatefulWidget {
   const MapScreen({super.key});
@@ -23,6 +27,19 @@ class _MapScreenState extends State<MapScreen> {
   void initState() {
     super.initState();
     _initMap();
+    DatabaseService.historyChangeNotifier.addListener(_onHistoryChanged);
+  }
+
+  @override
+  void dispose() {
+    DatabaseService.historyChangeNotifier.removeListener(_onHistoryChanged);
+    super.dispose();
+  }
+
+  void _onHistoryChanged() {
+    if (mounted) {
+      _loadHistoryMarkers();
+    }
   }
 
   Future<void> _initMap() async {
@@ -41,29 +58,343 @@ class _MapScreenState extends State<MapScreen> {
     });
   }
 
-  Future<void> _loadHistoryMarkers() async {
-    final history = await HistoryService().getHistory();
-    final Set<Marker> newMarkers = {};
-    
-    for (var item in history) {
-      final signInfo = _parseSignType(item.label);
-      newMarkers.add(
-        Marker(
-          markerId: MarkerId(item.id),
-          position: LatLng(item.latitude, item.longitude),
-          icon: BitmapDescriptor.defaultMarkerWithHue(signInfo.markerHue),
-          onTap: () {
-            setState(() {
-              _selectedItem = item;
-            });
-            _animateTo(item.latitude, item.longitude);
-          },
-        ),
+  Future<BitmapDescriptor> _createCustomMarker(Uint8List bytes, _SignTypeInfo signInfo) async {
+    try {
+      final ui.Codec codec = await ui.instantiateImageCodec(
+        bytes,
+        targetWidth: 100,
+        targetHeight: 100,
       );
+      final ui.FrameInfo fi = await codec.getNextFrame();
+      final ui.Image image = fi.image;
+
+      final ui.PictureRecorder pictureRecorder = ui.PictureRecorder();
+      final Canvas canvas = Canvas(pictureRecorder);
+      
+      const double size = 120.0;
+      const double radius = size / 2;
+      
+      final double circleY = 50.0;
+      final double circleRadius = 45.0;
+      final double pinBottomY = 115.0;
+      final double triangleWidth = 24.0;
+
+      // Draw shadow for both pin and circle
+      final Paint shadowPaint = Paint()
+        ..color = Colors.black.withOpacity(0.35)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 5);
+
+      final Path shadowPath = Path()
+        ..addOval(Rect.fromCircle(center: Offset(radius, circleY + 2), radius: circleRadius))
+        ..moveTo(radius - triangleWidth / 2, circleY + 25)
+        ..lineTo(radius, pinBottomY + 2)
+        ..lineTo(radius + triangleWidth / 2, circleY + 25)
+        ..close();
+      canvas.drawPath(shadowPath, shadowPaint);
+
+      // Draw outer white shape
+      final Paint borderPaint = Paint()..color = Colors.white;
+      final Path pinPath = Path()
+        ..addOval(Rect.fromCircle(center: Offset(radius, circleY), radius: circleRadius))
+        ..moveTo(radius - triangleWidth / 2, circleY + 25)
+        ..lineTo(radius, pinBottomY)
+        ..lineTo(radius + triangleWidth / 2, circleY + 25)
+        ..close();
+      canvas.drawPath(pinPath, borderPaint);
+
+      // Draw inner category color ring
+      final Paint categoryPaint = Paint()
+        ..color = signInfo.badgeColor
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 4.0;
+      canvas.drawCircle(Offset(radius, circleY), circleRadius - 3.5, categoryPaint);
+
+      // Draw inner circle clip path for image
+      canvas.save();
+      final Path clipPath = Path()
+        ..addOval(Rect.fromCircle(center: Offset(radius, circleY), radius: circleRadius - 7));
+      canvas.clipPath(clipPath);
+
+      // Draw the image
+      paintImage(
+        canvas: canvas,
+        rect: Rect.fromCircle(center: Offset(radius, circleY), radius: circleRadius - 7),
+        image: image,
+        fit: BoxFit.cover,
+      );
+      
+      canvas.restore();
+
+      // Convert to image
+      final ui.Picture picture = pictureRecorder.endRecording();
+      final ui.Image markerImage = await picture.toImage(size.toInt(), (size + 30).toInt());
+      final ByteData? byteData = await markerImage.toByteData(format: ui.ImageByteFormat.png);
+      
+      if (byteData != null) {
+        return BitmapDescriptor.fromBytes(byteData.buffer.asUint8List());
+      }
+    } catch (e) {
+      debugPrint('Error generating custom marker: $e');
     }
     
+    return BitmapDescriptor.defaultMarkerWithHue(signInfo.markerHue);
+  }
+
+  Future<BitmapDescriptor> _createFallbackMarker(_SignTypeInfo signInfo, String label) async {
+    try {
+      final ui.PictureRecorder pictureRecorder = ui.PictureRecorder();
+      final Canvas canvas = Canvas(pictureRecorder);
+      
+      const double size = 120.0;
+      const double radius = size / 2;
+      
+      final double circleY = 50.0;
+      final double circleRadius = 45.0;
+      final double pinBottomY = 115.0;
+      final double triangleWidth = 24.0;
+
+      // 1. Vẽ bóng đổ cho ghim
+      final Paint shadowPaint = Paint()
+        ..color = Colors.black.withOpacity(0.35)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 5);
+
+      final Path shadowPath = Path()
+        ..addOval(Rect.fromCircle(center: Offset(radius, circleY + 2), radius: circleRadius))
+        ..moveTo(radius - triangleWidth / 2, circleY + 25)
+        ..lineTo(radius, pinBottomY + 2)
+        ..lineTo(radius + triangleWidth / 2, circleY + 25)
+        ..close();
+      canvas.drawPath(shadowPath, shadowPaint);
+
+      // 2. Vẽ ghim màu trắng bên ngoài
+      final Paint borderPaint = Paint()..color = Colors.white;
+      final Path pinPath = Path()
+        ..addOval(Rect.fromCircle(center: Offset(radius, circleY), radius: circleRadius))
+        ..moveTo(radius - triangleWidth / 2, circleY + 25)
+        ..lineTo(radius, pinBottomY)
+        ..lineTo(radius + triangleWidth / 2, circleY + 25)
+        ..close();
+      canvas.drawPath(pinPath, borderPaint);
+
+      // 3. Vẽ biển báo vector tùy chỉnh bên trong ghim
+      final double innerRadius = circleRadius - 4;
+      final Offset center = Offset(radius, circleY);
+      final lowerLabel = label.toLowerCase();
+
+      if (lowerLabel.contains('cấm') || lowerLabel.contains('tốc độ tối đa') || lowerLabel.contains('hạn chế') || lowerLabel.contains('dừng lại')) {
+        // Biển báo cấm (Nền trắng, viền đỏ)
+        canvas.drawCircle(center, innerRadius, Paint()..color = Colors.white);
+        canvas.drawCircle(center, innerRadius - 2, Paint()
+          ..color = Colors.red
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 8.0);
+        
+        if (lowerLabel.contains('ngược chiều') || lowerLabel.contains('cấm đi ngược chiều') || lowerLabel.contains('cấm đường cấm')) {
+          // Biển cấm đi ngược chiều (Nền đỏ, thanh trắng nằm ngang)
+          canvas.drawCircle(center, innerRadius - 2, Paint()..color = Colors.red);
+          canvas.drawRect(
+            Rect.fromCenter(center: center, width: innerRadius * 1.3, height: innerRadius * 0.35),
+            Paint()..color = Colors.white,
+          );
+        } else if (lowerLabel.contains('dừng lại') || lowerLabel.contains('stop')) {
+          // Biển STOP (Hình bát giác màu đỏ, chữ STOP trắng)
+          final double stopRadius = innerRadius - 2;
+          final Path octagon = Path();
+          for (int i = 0; i < 8; i++) {
+            final double angle = (i * 45 - 22.5) * pi / 180;
+            final double x = radius + stopRadius * cos(angle);
+            final double y = circleY + stopRadius * sin(angle);
+            if (i == 0) {
+              octagon.moveTo(x, y);
+            } else {
+              octagon.lineTo(x, y);
+            }
+          }
+          octagon.close();
+          canvas.drawPath(octagon, Paint()..color = Colors.red);
+          
+          final TextPainter tp = TextPainter(textDirection: TextDirection.ltr);
+          tp.text = const TextSpan(
+            text: 'STOP',
+            style: TextStyle(
+              fontSize: 15,
+              fontWeight: FontWeight.w900,
+              color: Colors.white,
+            ),
+          );
+          tp.layout();
+          tp.paint(canvas, Offset(radius - tp.width / 2, circleY - tp.height / 2));
+        } else if (lowerLabel.contains('tốc độ tối đa')) {
+          // Biển tốc độ tối đa (Viền đỏ, số tốc độ đen)
+          final matches = RegExp(r'\d+').allMatches(lowerLabel);
+          final speedStr = matches.isNotEmpty ? matches.first.group(0) : '50';
+          final TextPainter tp = TextPainter(textDirection: TextDirection.ltr);
+          tp.text = TextSpan(
+            text: speedStr,
+            style: const TextStyle(
+              fontSize: 24,
+              fontWeight: FontWeight.w800,
+              color: Colors.black,
+            ),
+          );
+          tp.layout();
+          tp.paint(canvas, Offset(radius - tp.width / 2, circleY - tp.height / 2));
+        } else {
+          // Biển cấm khác (Có gạch chéo đỏ)
+          canvas.drawLine(
+            Offset(radius - innerRadius * 0.5, circleY - innerRadius * 0.5),
+            Offset(radius + innerRadius * 0.5, circleY + innerRadius * 0.5),
+            Paint()
+              ..color = Colors.red
+              ..strokeWidth = 6.0,
+          );
+        }
+      } else if (lowerLabel.contains('chú ý') || lowerLabel.contains('nguy hiểm') || lowerLabel.contains('giao nhau')) {
+        // Biển cảnh báo nguy hiểm (Hình tam giác vàng, viền đỏ, dấu chấm than đen)
+        canvas.drawCircle(center, innerRadius, Paint()..color = Colors.white);
+        
+        final Path triangle = Path()
+          ..moveTo(radius, circleY - innerRadius * 0.8)
+          ..lineTo(radius - innerRadius * 0.85, circleY + innerRadius * 0.7)
+          ..lineTo(radius + innerRadius * 0.85, circleY + innerRadius * 0.7)
+          ..close();
+        canvas.drawPath(triangle, Paint()..color = const Color(0xFFFFCC00));
+        canvas.drawPath(triangle, Paint()
+          ..color = Colors.red
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 5.0);
+          
+        final TextPainter tp = TextPainter(textDirection: TextDirection.ltr);
+        tp.text = const TextSpan(
+          text: '!',
+          style: TextStyle(
+            fontSize: 26,
+            fontWeight: FontWeight.w900,
+            color: Colors.black,
+          ),
+        );
+        tp.layout();
+        tp.paint(canvas, Offset(radius - tp.width / 2, circleY - tp.height / 1.7));
+      } else if (lowerLabel.contains('chỉ được') || lowerLabel.contains('tốc độ tối thiểu') || lowerLabel.contains('vòng xuyến') || lowerLabel.contains('hướng phải đi')) {
+        // Biển hiệu lệnh (Tròn xanh lam, mũi tên trắng hướng đi)
+        canvas.drawCircle(center, innerRadius, Paint()..color = Colors.blue.shade700);
+        canvas.drawCircle(center, innerRadius - 2, Paint()
+          ..color = Colors.white
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 3.0);
+          
+        final TextPainter tp = TextPainter(textDirection: TextDirection.ltr);
+        tp.text = TextSpan(
+          text: String.fromCharCode(Icons.arrow_upward_rounded.codePoint),
+          style: TextStyle(
+            fontSize: 30,
+            fontFamily: Icons.arrow_upward_rounded.fontFamily,
+            color: Colors.white,
+          ),
+        );
+        tp.layout();
+        tp.paint(canvas, Offset(radius - tp.width / 2, circleY - tp.height / 2));
+      } else if (lowerLabel.contains('hết') || lowerLabel.contains('kết thúc')) {
+        // Biển hết hiệu lệnh cấm (Tròn xám trắng có vạch chéo)
+        canvas.drawCircle(center, innerRadius, Paint()..color = Colors.white);
+        canvas.drawCircle(center, innerRadius - 2, Paint()
+          ..color = Colors.grey
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 4.0);
+          
+        final slashPaint = Paint()
+          ..color = Colors.grey.shade400
+          ..strokeWidth = 3.0;
+        for (int i = -2; i <= 2; i++) {
+          final double offset = i * 6.0;
+          canvas.drawLine(
+            Offset(radius - innerRadius * 0.5 + offset, circleY + innerRadius * 0.5),
+            Offset(radius + innerRadius * 0.5 + offset, circleY - innerRadius * 0.5),
+            slashPaint,
+          );
+        }
+      } else {
+        // Biển chỉ dẫn (Hình vuông xanh lam)
+        canvas.drawCircle(center, innerRadius, Paint()..color = Colors.white);
+        
+        final double rectSize = innerRadius * 1.3;
+        canvas.drawRect(
+          Rect.fromCenter(center: center, width: rectSize, height: rectSize),
+          Paint()..color = Colors.blue.shade600,
+        );
+        canvas.drawRect(
+          Rect.fromCenter(center: center, width: rectSize - 4, height: rectSize - 4),
+          Paint()
+            ..color = Colors.white
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 2.0,
+        );
+        
+        final TextPainter tp = TextPainter(textDirection: TextDirection.ltr);
+        tp.text = const TextSpan(
+          text: 'i',
+          style: TextStyle(
+            fontSize: 24,
+            fontWeight: FontWeight.w900,
+            color: Colors.white,
+          ),
+        );
+        tp.layout();
+        tp.paint(canvas, Offset(radius - tp.width / 2, circleY - tp.height / 2));
+      }
+
+      final ui.Picture picture = pictureRecorder.endRecording();
+      final ui.Image markerImage = await picture.toImage(size.toInt(), (size + 30).toInt());
+      final ByteData? byteData = await markerImage.toByteData(format: ui.ImageByteFormat.png);
+      
+      if (byteData != null) {
+        return BitmapDescriptor.fromBytes(byteData.buffer.asUint8List());
+      }
+    } catch (e) {
+      debugPrint('Error generating custom fallback marker: $e');
+    }
+    
+    return BitmapDescriptor.defaultMarkerWithHue(signInfo.markerHue);
+  }
+
+  Future<void> _loadHistoryMarkers() async {
+    final history = await DatabaseService().getDetectionHistory();
+
+    // Build all markers in parallel to avoid blocking Google Maps tile threads
+    final markerFutures = history.map((item) async {
+      final signInfo = _parseSignType(item.label);
+
+      final BitmapDescriptor markerIcon;
+      if (item.imageBytes != null && item.imageBytes!.isNotEmpty) {
+        markerIcon = await _createCustomMarker(item.imageBytes!, signInfo);
+      } else {
+        markerIcon = await _createFallbackMarker(signInfo, item.label);
+      }
+
+      return Marker(
+        markerId: MarkerId(item.id),
+        position: LatLng(item.latitude, item.longitude),
+        icon: markerIcon,
+        onTap: () {
+          setState(() {
+            _selectedItem = item;
+          });
+          _animateTo(item.latitude, item.longitude);
+        },
+      );
+    });
+
+    final newMarkers = await Future.wait(markerFutures);
+
+    if (!mounted) return;
     setState(() {
-      _markers.addAll(newMarkers);
+      _markers
+        ..clear()
+        ..addAll(newMarkers);
+      if (_selectedItem != null &&
+          !history.any((item) => item.id == _selectedItem!.id)) {
+        _selectedItem = null;
+      }
     });
   }
 
@@ -321,7 +652,12 @@ class _MapScreenState extends State<MapScreen> {
                         fit: BoxFit.cover,
                       ),
                     )
-                  : const Icon(Icons.traffic, color: AppColors.onSurfaceVariant),
+                  : Center(
+                      child: TrafficSignIcon(
+                        label: item.label,
+                        size: 40,
+                      ),
+                    ),
             ),
             const SizedBox(width: 16),
             // Info
@@ -377,7 +713,7 @@ class _MapScreenState extends State<MapScreen> {
                       const SizedBox(width: 4),
                       Expanded(
                         child: Text(
-                          item.locationName,
+                          item.displayLocationName,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(

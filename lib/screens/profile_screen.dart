@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
-import '../theme/app_colors.dart';
+import 'package:traffic_detect/core/theme/app_colors.dart';
 import '../services/auth_service.dart';
 import 'login_screen.dart';
+import 'community_report_screen.dart';
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
@@ -28,18 +29,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
               child: Column(
                 children: [
                   _buildProfileInfo(),
-                  const SizedBox(height: 32),
-                  _buildStatsRow(),
                   const SizedBox(height: 24),
                   _buildMenuSection([
                     _MenuItem(
                         icon: Icons.person_outline,
                         iconColor: AppColors.primary,
                         title: 'Thông tin cá nhân'),
-                    _MenuItem(
-                        icon: Icons.history,
-                        iconColor: AppColors.primary,
-                        title: 'Lịch sử hành trình'),
                   ]),
                   const SizedBox(height: 12),
                   _buildMenuSection([
@@ -48,10 +43,16 @@ class _ProfileScreenState extends State<ProfileScreen> {
                         iconColor: AppColors.secondary,
                         title: 'Cài đặt thông báo'),
                     _MenuItem(
-                        icon: Icons.videocam_outlined,
+                        icon: Icons.campaign_outlined,
                         iconColor: AppColors.secondary,
-                        title: 'Thiết bị kết nối',
-                        subtitle: 'Camera Pro-X / HUD V2'),
+                        title: 'Báo cáo sự cố',
+                        subtitle: 'Cảnh báo tai nạn, ngập lụt, công trình...',
+                        onTap: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(builder: (context) => const CommunityReportScreen()),
+                          );
+                        }),
                   ]),
                   const SizedBox(height: 12),
                   _buildMenuSection([
@@ -119,7 +120,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   Widget _buildProfileInfo() {
     final user = _authService.currentUser;
-    final displayName = user?.displayName ?? 'Người dùng Sentinel';
+    final displayName = user?.email?.split('@').first ?? 'Người dùng Sentinel';
     final email = user?.email ?? 'Chưa cập nhật email';
 
     return Column(
@@ -183,27 +184,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
-  Widget _buildStatsRow() {
-    return Row(
-      children: [
-        Expanded(
-          child: _StatCard(
-            value: '98.5',
-            valueColor: AppColors.secondary,
-            label: 'CHỈ SỐ AN TOÀN',
-          ),
-        ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: _StatCard(
-            value: '1,240',
-            valueColor: AppColors.primary,
-            label: 'KM HÀNH TRÌNH',
-          ),
-        ),
-      ],
-    );
-  }
 
   Widget _buildMenuSection(List<_MenuItem> items) {
     return Container(
@@ -264,46 +244,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 }
 
-class _StatCard extends StatelessWidget {
-  final String value;
-  final Color valueColor;
-  final String label;
-
-  const _StatCard({required this.value, required this.valueColor, required this.label});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(vertical: 16),
-      decoration: BoxDecoration(
-        color: AppColors.surfaceContainerLow,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.white.withOpacity(0.04)),
-      ),
-      child: Column(
-        children: [
-          Text(
-            value,
-            style: GoogleFonts.inter(
-              fontSize: 20,
-              fontWeight: FontWeight.w700,
-              color: valueColor,
-            ),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            label,
-            style: GoogleFonts.inter(
-              fontSize: 10,
-              fontWeight: FontWeight.w600,
-              color: AppColors.onSurfaceVariant.withOpacity(0.7),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
 
 class _MenuItem extends StatelessWidget {
   final IconData icon;

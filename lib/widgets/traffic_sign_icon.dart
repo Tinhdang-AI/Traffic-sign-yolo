@@ -44,15 +44,7 @@ class TrafficSignIcon extends StatelessWidget {
   }
 
   Widget _buildProhibitionSign(String l) {
-    IconData? iconData;
-    if (l.contains('ô tô')) iconData = Icons.directions_car;
-    else if (l.contains('còi')) iconData = Icons.volume_off;
-    else if (l.contains('quay đầu')) iconData = Icons.u_turn_left;
-    else if (l.contains('rẽ phải')) iconData = Icons.turn_right;
-    else if (l.contains('rẽ trái')) iconData = Icons.turn_left;
-    else if (l.contains('đi thẳng')) iconData = Icons.arrow_upward;
-    else if (l.contains('vượt')) iconData = Icons.two_wheeler; // Approximating "2 vehicles"
-    else if (l.contains('chiều cao')) {
+    if (l.contains('chiều cao')) {
       final match = RegExp(r'\d+\.\d+').firstMatch(l);
       final height = match != null ? match.group(0) : '4.3';
       return Stack(
@@ -66,20 +58,25 @@ class TrafficSignIcon extends StatelessWidget {
               color: Colors.white,
               border: Border.all(color: Colors.red, width: size * 0.12),
             ),
+          ),
+          CustomPaint(
+            size: Size(size, size),
+            painter: _HeightLimitPainter(),
+          ),
+          Container(
+            width: size * 0.6,
+            height: size * 0.4,
             alignment: Alignment.center,
-            child: Padding(
-              padding: const EdgeInsets.all(2.0),
-              child: FittedBox(
-                fit: BoxFit.scaleDown,
-                child: Text(
-                  '${height}m',
-                  maxLines: 1,
-                  softWrap: false,
-                  style: TextStyle(
-                    color: Colors.black,
-                    fontSize: size * 0.3,
-                    fontWeight: FontWeight.w900,
-                  ),
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Text(
+                '${height}m',
+                maxLines: 1,
+                softWrap: false,
+                style: TextStyle(
+                  color: Colors.black,
+                  fontSize: size * 0.28,
+                  fontWeight: FontWeight.w900,
                 ),
               ),
             ),
@@ -87,6 +84,47 @@ class TrafficSignIcon extends StatelessWidget {
         ],
       );
     }
+
+    if (l.contains('vượt')) {
+      return Stack(
+        alignment: Alignment.center,
+        children: [
+          Container(
+            width: size,
+            height: size,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: Colors.white,
+              border: Border.all(color: Colors.red, width: size * 0.12),
+            ),
+          ),
+          Positioned(
+            left: size * 0.18,
+            child: Icon(Icons.directions_car, size: size * 0.38, color: Colors.red),
+          ),
+          Positioned(
+            right: size * 0.18,
+            child: Icon(Icons.directions_car, size: size * 0.38, color: Colors.black),
+          ),
+          Transform.rotate(
+            angle: -0.785398,
+            child: Container(
+              width: size * 0.08,
+              height: size * 0.8,
+              color: Colors.red,
+            ),
+          ),
+        ],
+      );
+    }
+
+    IconData? iconData;
+    if (l.contains('ô tô')) iconData = Icons.directions_car;
+    else if (l.contains('còi')) iconData = Icons.campaign; // Megaphone horn
+    else if (l.contains('quay đầu')) iconData = Icons.u_turn_left;
+    else if (l.contains('rẽ phải')) iconData = Icons.turn_right;
+    else if (l.contains('rẽ trái')) iconData = Icons.turn_left;
+    else if (l.contains('đi thẳng')) iconData = Icons.arrow_upward;
 
     return Stack(
       alignment: Alignment.center,
@@ -164,27 +202,105 @@ class TrafficSignIcon extends StatelessWidget {
   }
 
   Widget _buildWarningSign(String l) {
+    if (l.contains('hầm chui')) {
+      return CustomPaint(
+        size: Size(size, size),
+        painter: _TrianglePainter(),
+        child: CustomPaint(
+          size: Size(size, size),
+          painter: _TunnelPainter(),
+        ),
+      );
+    }
+    
+    if (l.contains('tín hiệu đèn')) {
+      return CustomPaint(
+        size: Size(size, size),
+        painter: _TrianglePainter(),
+        child: SizedBox(
+          width: size,
+          height: size,
+          child: Center(
+            child: Padding(
+              padding: EdgeInsets.only(top: size * 0.18),
+              child: Container(
+                width: size * 0.18,
+                height: size * 0.42,
+                decoration: BoxDecoration(
+                  color: Colors.black87,
+                  borderRadius: BorderRadius.circular(size * 0.04),
+                ),
+                padding: const EdgeInsets.symmetric(vertical: 2),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                  children: [
+                    Container(width: size * 0.08, height: size * 0.08, decoration: const BoxDecoration(shape: BoxShape.circle, color: Colors.red)),
+                    Container(width: size * 0.08, height: size * 0.08, decoration: const BoxDecoration(shape: BoxShape.circle, color: Colors.amber)),
+                    Container(width: size * 0.08, height: size * 0.08, decoration: const BoxDecoration(shape: BoxShape.circle, color: Colors.green)),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    if (l.contains('không bằng phẳng')) {
+      return CustomPaint(
+        size: Size(size, size),
+        painter: _TrianglePainter(),
+        child: CustomPaint(
+          size: Size(size, size),
+          painter: _BumpyRoadPainter(),
+        ),
+      );
+    }
+
+    if (l.contains('đi chậm')) {
+      return CustomPaint(
+        size: Size(size, size),
+        painter: _TrianglePainter(),
+        child: SizedBox(
+          width: size,
+          height: size,
+          child: Align(
+            alignment: const Alignment(0, 0.45),
+            child: Text(
+              'CHẬM',
+              style: TextStyle(
+                color: Colors.black,
+                fontSize: size * 0.18,
+                fontWeight: FontWeight.w900,
+                letterSpacing: -0.5,
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
     IconData iconData = Icons.warning_amber_rounded; // Default
     if (l.contains('người đi bộ')) iconData = Icons.directions_walk;
-    else if (l.contains('tín hiệu đèn')) iconData = Icons.traffic;
-    else if (l.contains('trẻ em')) iconData = Icons.child_care;
+    else if (l.contains('trẻ em')) iconData = Icons.directions_run; // Children crossing sign
     else if (l.contains('công trình')) iconData = Icons.construction;
     else if (l.contains('giao nhau')) iconData = Icons.close;
     else if (l.contains('trơn')) iconData = Icons.waves;
     else if (l.contains('ngoặt')) iconData = Icons.turn_right;
     else if (l.contains('đường đôi')) iconData = Icons.merge_type;
     else if (l.contains('hẹp')) iconData = Icons.compress;
-    else if (l.contains('hầm chui')) iconData = Icons.dark_mode; // Fallback for tunnel
 
+    // The triangle's visual center (centroid) is at ~58% from top.
+    // Icon is placed so its center aligns with the triangle centroid.
     return CustomPaint(
       size: Size(size, size),
       painter: _TrianglePainter(),
       child: SizedBox(
         width: size,
         height: size,
-        child: Padding(
-          padding: EdgeInsets.only(top: size * 0.35),
-          child: Icon(iconData, size: size * 0.4, color: Colors.black),
+        child: Align(
+          alignment: const Alignment(0, 0.35), // Slightly below center = triangle centroid
+          child: Icon(iconData, size: size * 0.38, color: Colors.black87),
         ),
       ),
     );
@@ -348,10 +464,13 @@ class TrafficSignIcon extends StatelessWidget {
           ),
         ),
         if (l.contains('kết thúc'))
-          Container(
-            width: size * 0.1,
-            height: size,
-            color: Colors.black87,
+          Transform.rotate(
+            angle: -0.785398,
+            child: Container(
+              width: size * 0.1,
+              height: size * 1.1,
+              color: Colors.black87,
+            ),
           ),
       ],
     );
@@ -452,6 +571,93 @@ class _OctagonPainter extends CustomPainter {
 
     canvas.drawPath(path, paint);
     canvas.drawPath(path, borderPaint);
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+class _HeightLimitPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = Colors.black
+      ..style = PaintingStyle.fill;
+    
+    final w = size.width;
+    final h = size.height;
+    
+    // Top triangle pointing down
+    final topPath = Path()
+      ..moveTo(w / 2, h * 0.32)
+      ..lineTo(w / 2 - w * 0.08, h * 0.22)
+      ..lineTo(w / 2 + w * 0.08, h * 0.22)
+      ..close();
+      
+    // Bottom triangle pointing up
+    final bottomPath = Path()
+      ..moveTo(w / 2, h * 0.68)
+      ..lineTo(w / 2 - w * 0.08, h * 0.78)
+      ..lineTo(w / 2 + w * 0.08, h * 0.78)
+      ..close();
+      
+    canvas.drawPath(topPath, paint);
+    canvas.drawPath(bottomPath, paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+class _TunnelPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = Colors.black87
+      ..style = PaintingStyle.fill;
+      
+    final w = size.width;
+    final h = size.height;
+    
+    // Draw an arch representing a tunnel opening
+    final path = Path()
+      ..moveTo(w * 0.35, h * 0.78)
+      ..lineTo(w * 0.35, h * 0.58)
+      ..quadraticBezierTo(w * 0.5, h * 0.40, w * 0.65, h * 0.58)
+      ..lineTo(w * 0.65, h * 0.78)
+      ..lineTo(w * 0.58, h * 0.78)
+      ..lineTo(w * 0.58, h * 0.60)
+      ..quadraticBezierTo(w * 0.5, h * 0.50, w * 0.42, h * 0.60)
+      ..lineTo(w * 0.42, h * 0.78)
+      ..close();
+      
+    canvas.drawPath(path, paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+class _BumpyRoadPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = Colors.black87
+      ..style = PaintingStyle.fill;
+      
+    final w = size.width;
+    final h = size.height;
+    
+    // Draw two bumps
+    final path = Path()
+      ..moveTo(w * 0.28, h * 0.72)
+      ..quadraticBezierTo(w * 0.36, h * 0.56, w * 0.44, h * 0.72)
+      ..quadraticBezierTo(w * 0.52, h * 0.56, w * 0.60, h * 0.72)
+      ..lineTo(w * 0.60, h * 0.75)
+      ..lineTo(w * 0.28, h * 0.75)
+      ..close();
+      
+    canvas.drawPath(path, paint);
   }
 
   @override

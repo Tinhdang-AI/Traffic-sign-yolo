@@ -1,17 +1,24 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
-import 'screens/login_screen.dart';
-import 'screens/register_screen.dart';
 import 'screens/main_shell.dart';
-import 'theme/app_colors.dart';
-import 'package:firebase_core/firebase_core.dart';
+import 'core/theme/app_colors.dart';
+import 'controllers/app_shell_provider.dart';
+import 'controllers/navigation_provider.dart';
+import 'controllers/auth_provider.dart';
+import 'controllers/settings_provider.dart';
+import 'controllers/detection_provider.dart';
+import 'core/config/supabase_config.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  
-  await Firebase.initializeApp();
+
+  await Supabase.initialize(
+    url: supabaseUrl,
+    anonKey: supabaseAnonKey,
+  );
 
   SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
   SystemChrome.setSystemUIOverlayStyle(
@@ -22,7 +29,18 @@ void main() async {
     ),
   );
 
-  runApp(const SentinelApp());
+  runApp(
+    MultiProvider(
+      providers: [
+        ChangeNotifierProvider(create: (_) => AppShellProvider()),
+        ChangeNotifierProvider(create: (_) => NavigationProvider()),
+        ChangeNotifierProvider(create: (_) => AuthProvider()),
+        ChangeNotifierProvider(create: (_) => SettingsProvider()),
+        ChangeNotifierProvider(create: (_) => DetectionProvider()),
+      ],
+      child: const SentinelApp(),
+    ),
+  );
 }
 
 class SentinelApp extends StatelessWidget {
@@ -90,4 +108,3 @@ class SentinelApp extends StatelessWidget {
     );
   }
 }
-

@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
-import '../services/history_service.dart';
+import '../services/database_service.dart';
 import '../widgets/traffic_sign_icon.dart';
 
 class StatsHistoryScreen extends StatefulWidget {
@@ -18,16 +18,85 @@ class _StatsHistoryScreenState extends State<StatsHistoryScreen> {
   void initState() {
     super.initState();
     _loadHistory();
+    DatabaseService.historyChangeNotifier.addListener(_loadHistory);
+  }
+
+  @override
+  void dispose() {
+    DatabaseService.historyChangeNotifier.removeListener(_loadHistory);
+    super.dispose();
   }
 
   Future<void> _loadHistory() async {
-    final history = await HistoryService().getHistory();
+    final history = await DatabaseService().getDetectionHistory();
     if (mounted) {
       setState(() {
         _history = history;
         _isLoading = false;
       });
     }
+  }
+
+  Future<void> _clearAllHistory() async {
+    setState(() {
+      _isLoading = true;
+    });
+    await DatabaseService().clearDetectionHistory();
+    await _loadHistory();
+  }
+
+  void _showClearDialog() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF17181D),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+          side: BorderSide(color: Colors.white.withOpacity(0.08)),
+        ),
+        title: Text(
+          'Xóa lịch sử quét?',
+          style: GoogleFonts.inter(
+            color: Colors.white,
+            fontWeight: FontWeight.bold,
+            fontSize: 18,
+          ),
+        ),
+        content: Text(
+          'Tất cả lịch sử quét biển báo sẽ bị xóa vĩnh viễn và không thể khôi phục.',
+          style: GoogleFonts.inter(
+            color: Colors.white70,
+            fontSize: 13,
+            height: 1.4,
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text(
+              'Hủy',
+              style: GoogleFonts.inter(
+                color: Colors.white38,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context);
+              _clearAllHistory();
+            },
+            child: Text(
+              'Xóa tất cả',
+              style: GoogleFonts.inter(
+                color: Colors.redAccent,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -94,6 +163,20 @@ class _StatsHistoryScreenState extends State<StatsHistoryScreen> {
                 ),
               ),
               const Spacer(),
+              if (_history.isNotEmpty) ...[
+                IconButton(
+                  icon: const Icon(
+                    Icons.delete_sweep_outlined,
+                    color: Colors.redAccent,
+                    size: 20,
+                  ),
+                  onPressed: _showClearDialog,
+                  tooltip: 'Xóa tất cả lịch sử',
+                  constraints: const BoxConstraints(),
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                ),
+                const SizedBox(width: 4),
+              ],
               _HeaderChip(label: '${_history.length} BIỂN BÁO'),
             ],
           ),
@@ -263,9 +346,7 @@ class _HistoryCard extends StatelessWidget {
                     const SizedBox(width: 6),
                     Expanded(
                       child: Text(
-                        item.locationName.isNotEmpty 
-                            ? _cleanLocationName(item.locationName) 
-                            : '${item.latitude.toStringAsFixed(4)}, ${item.longitude.toStringAsFixed(4)}',
+                        _cleanLocationName(item.displayLocationName),
                         style: GoogleFonts.inter(
                           fontSize: 11.5,
                           height: 1.35,
@@ -281,7 +362,80 @@ class _HistoryCard extends StatelessWidget {
           ),
           const SizedBox(width: 8),
           // Right: Pill-shaped confidence badge
-          _HistoryConfidenceBadge(confidence: item.confidence),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              _HistoryConfidenceBadge(confidence: item.confidence),
+              const SizedBox(height: 16),
+              IconButton(
+                icon: const Icon(
+                  Icons.delete_outline_rounded,
+                  color: Colors.redAccent,
+                  size: 20,
+                ),
+                onPressed: () => _showDeleteSingleDialog(context),
+                constraints: const BoxConstraints(),
+                padding: EdgeInsets.zero,
+                splashRadius: 20,
+                tooltip: 'Xóa biển báo này',
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showDeleteSingleDialog(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (dialogCtx) => AlertDialog(
+        backgroundColor: const Color(0xFF17181D),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+          side: BorderSide(color: Colors.white.withOpacity(0.08)),
+        ),
+        title: Text(
+          'Xóa biển báo này?',
+          style: GoogleFonts.inter(
+            color: Colors.white,
+            fontWeight: FontWeight.bold,
+            fontSize: 17,
+          ),
+        ),
+        content: Text(
+          'Bạn có chắc chắn muốn xóa biển báo "${item.label.toUpperCase()}" này ra khỏi lịch sử không?',
+          style: GoogleFonts.inter(
+            color: Colors.white70,
+            fontSize: 13,
+            height: 1.45,
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogCtx),
+            child: Text(
+              'Hủy',
+              style: GoogleFonts.inter(
+                color: Colors.white38,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+          TextButton(
+            onPressed: () async {
+              Navigator.pop(dialogCtx);
+              await DatabaseService().deleteDetectionHistoryItem(item.id);
+            },
+            child: Text(
+              'Xóa',
+              style: GoogleFonts.inter(
+                color: Colors.redAccent,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
         ],
       ),
     );

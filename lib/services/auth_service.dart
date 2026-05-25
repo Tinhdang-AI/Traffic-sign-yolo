@@ -1,25 +1,25 @@
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import 'profile_service.dart';
 
 class AuthService {
-  final FirebaseAuth _auth = FirebaseAuth.instance;
+  final SupabaseClient _supabase = Supabase.instance.client;
 
-  // Stream of auth changes
-  Stream<User?> get authStateChanges => _auth.authStateChanges();
+  Stream<AuthState> get authStateChanges => _supabase.auth.onAuthStateChange;
 
-  // Get current user
-  User? get currentUser => _auth.currentUser;
+  User? get currentUser => _supabase.auth.currentUser;
 
-  // Sign In with Email & Password
-  Future<UserCredential?> signInWithEmailPassword(String email, String password) async {
+  String? get accessToken => _supabase.auth.currentSession?.accessToken;
+
+  Future<AuthResponse> signInWithEmailPassword(String email, String password) async {
     try {
-      final credential = await _auth.signInWithEmailAndPassword(
+      final response = await _supabase.auth.signInWithPassword(
         email: email,
         password: password,
       );
-      return credential;
-    } on FirebaseAuthException catch (e) {
-      debugPrint('SignIn Error: ${e.code} - ${e.message}');
+      return response;
+    } on AuthException catch (e) {
+      debugPrint('SignIn Error: ${e.message}');
       rethrow;
     } catch (e) {
       debugPrint('SignIn Error: $e');
@@ -27,16 +27,15 @@ class AuthService {
     }
   }
 
-  // Register with Email & Password
-  Future<UserCredential?> registerWithEmailPassword(String email, String password) async {
+  Future<AuthResponse> registerWithEmailPassword(String email, String password) async {
     try {
-      final credential = await _auth.createUserWithEmailAndPassword(
+      final response = await _supabase.auth.signUp(
         email: email,
         password: password,
       );
-      return credential;
-    } on FirebaseAuthException catch (e) {
-      debugPrint('Register Error: ${e.code} - ${e.message}');
+      return response;
+    } on AuthException catch (e) {
+      debugPrint('Register Error: ${e.message}');
       rethrow;
     } catch (e) {
       debugPrint('Register Error: $e');
@@ -44,17 +43,40 @@ class AuthService {
     }
   }
 
-  // Update Display Name
-  Future<void> updateDisplayName(String name) async {
+  Future<void> updateUserProfile({
+    String? displayName,
+    String? phoneNumber,
+  }) async {
     try {
-      await _auth.currentUser?.updateDisplayName(name);
+      await _supabase.auth.updateUser(
+        UserAttributes(
+          data: {
+            if (displayName != null) 'display_name': displayName,
+            if (phoneNumber != null) 'phone': phoneNumber,
+          },
+        ),
+      );
     } catch (e) {
-      debugPrint('Update Name Error: $e');
+      debugPrint('Update Profile Error: $e');
+      rethrow;
     }
   }
 
-  // Sign Out
   Future<void> signOut() async {
-    await _auth.signOut();
+    try {
+      await _supabase.auth.signOut();
+    } catch (e) {
+      debugPrint('Sign Out Error: $e');
+      rethrow;
+    }
+  }
+
+  Future<void> resetPassword(String email) async {
+    try {
+      await _supabase.auth.resetPasswordForEmail(email);
+    } catch (e) {
+      debugPrint('Reset Password Error: $e');
+      rethrow;
+    }
   }
 }

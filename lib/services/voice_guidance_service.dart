@@ -1,10 +1,12 @@
 import 'dart:io';
 
+import 'package:flutter/services.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 
 class VoiceGuidanceService {
   static final VoiceGuidanceService _instance =
       VoiceGuidanceService._internal();
+  static const MethodChannel _channel = MethodChannel('traffic_detect/tts');
 
   factory VoiceGuidanceService() {
     return _instance;
@@ -202,6 +204,17 @@ class VoiceGuidanceService {
     _volumeLevel = volume.clamp(0.0, 1.0);
     if (_isInitialized) {
       await _tts.setVolume(_volumeLevel);
+    }
+  }
+
+  /// Open platform TTS settings page. Returns true on success.
+  Future<bool> openPlatformSettings() async {
+    try {
+      final res = await _channel.invokeMethod('openTtsSettings');
+      return res == true;
+    } on PlatformException catch (e) {
+      print('TTS Settings open failed: ${e.message}');
+      return false;
     }
   }
 

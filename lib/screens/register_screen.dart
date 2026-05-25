@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
-import '../theme/app_colors.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import '../core/theme/app_colors.dart';
 import '../services/auth_service.dart';
 import 'login_screen.dart';
 import 'main_shell.dart';
@@ -56,8 +57,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
     try {
       await _authService.registerWithEmailPassword(email, password);
-      await _authService.updateDisplayName(name);
-      
+      await _authService.updateUserProfile(displayName: name);
+
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Đăng ký thành công!')),
@@ -67,10 +68,22 @@ class _RegisterScreenState extends State<RegisterScreen> {
           MaterialPageRoute(builder: (context) => const MainShell()),
         );
       }
+    } on AuthException catch (e) {
+      if (mounted) {
+        String errorMsg = 'Đăng ký thất bại!';
+        if (e.message.contains('already exists')) {
+          errorMsg = 'Email đã được sử dụng!';
+        } else if (e.message.contains('Password')) {
+          errorMsg = 'Mật khẩu không đủ mạnh!';
+        }
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(errorMsg)),
+        );
+      }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Đăng ký thất bại! Email có thể đã tồn tại.')),
+          SnackBar(content: Text('Lỗi: $e')),
         );
       }
     } finally {

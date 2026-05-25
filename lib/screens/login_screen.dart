@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
-import '../theme/app_colors.dart';
+import 'package:traffic_detect/core/theme/app_colors.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../services/auth_service.dart';
 import 'register_screen.dart';
 import 'main_shell.dart';
@@ -16,7 +17,7 @@ class _LoginScreenState extends State<LoginScreen> {
   final _authService = AuthService();
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
-  
+
   bool _obscurePassword = true;
   bool _isLoading = false;
 
@@ -44,12 +45,18 @@ class _LoginScreenState extends State<LoginScreen> {
           MaterialPageRoute(builder: (context) => const MainShell()),
         );
       }
-    } catch (e) {
+    } on AuthException catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Sai tài khoản hoặc mật khẩu!')),
-        );
+        String errorMsg = 'Đăng nhập thất bại!';
+        if (e.message.contains('Invalid login credentials')) {
+          errorMsg = 'Email hoặc mật khẩu không chính xác!';
+        } else if (e.message.contains('Email not confirmed')) {
+          errorMsg = 'Vui lòng xác nhận email của bạn!';
+        }
+      
       }
+    } catch (e) {
+  
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -154,8 +161,6 @@ class _LoginScreenState extends State<LoginScreen> {
             ),
           ),
           const SizedBox(height: 32),
-          
-          // Email Field
           Text(
             'Email hoặc Số điện thoại',
             style: GoogleFonts.inter(
@@ -171,8 +176,6 @@ class _LoginScreenState extends State<LoginScreen> {
             prefixIcon: Icons.alternate_email,
           ),
           const SizedBox(height: 20),
-
-          // Password Field
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
@@ -217,17 +220,19 @@ class _LoginScreenState extends State<LoginScreen> {
             ),
           ),
           const SizedBox(height: 24),
-
-          // Login Button
           SizedBox(
             width: double.infinity,
             height: 52,
             child: ElevatedButton.icon(
               onPressed: _isLoading ? null : _handleLogin,
-              icon: _isLoading 
+              icon: _isLoading
                   ? const SizedBox(
-                      width: 20, height: 20, 
-                      child: CircularProgressIndicator(color: AppColors.onPrimary, strokeWidth: 2)
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(
+                        color: AppColors.onPrimary,
+                        strokeWidth: 2,
+                      ),
                     )
                   : const Icon(Icons.login, size: 20, color: AppColors.onPrimary),
               label: Text(
@@ -250,8 +255,6 @@ class _LoginScreenState extends State<LoginScreen> {
             ),
           ),
           const SizedBox(height: 32),
-
-          // Divider
           Row(
             children: [
               Expanded(child: Divider(color: Colors.white.withOpacity(0.05), thickness: 1)),
@@ -271,13 +274,11 @@ class _LoginScreenState extends State<LoginScreen> {
             ],
           ),
           const SizedBox(height: 24),
-
-          // Social Buttons
           Row(
             children: [
               Expanded(
                 child: _buildSocialButton(
-                  icon: Icons.g_mobiledata, // Fallback icon for Google
+                  icon: Icons.g_mobiledata,
                   label: 'Google',
                   onTap: () {},
                 ),
@@ -324,7 +325,11 @@ class _LoginScreenState extends State<LoginScreen> {
             fontSize: 14,
             color: AppColors.onSurfaceVariant.withOpacity(0.5),
           ),
-          prefixIcon: Icon(prefixIcon, color: AppColors.onSurfaceVariant.withOpacity(0.5), size: 20),
+          prefixIcon: Icon(
+            prefixIcon,
+            color: AppColors.onSurfaceVariant.withOpacity(0.5),
+            size: 20,
+          ),
           suffixIcon: suffixIcon,
           border: InputBorder.none,
           contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
@@ -390,7 +395,7 @@ class _LoginScreenState extends State<LoginScreen> {
                 TextSpan(
                   text: 'Đăng ký ngay',
                   style: TextStyle(
-                    color: AppColors.primary, 
+                    color: AppColors.primary,
                     fontWeight: FontWeight.w800,
                     fontSize: 20,
                     decoration: TextDecoration.underline,
