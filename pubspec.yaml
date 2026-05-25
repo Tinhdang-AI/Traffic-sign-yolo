@@ -60,11 +60,25 @@ dependencies:
   # Text-to-Speech
   flutter_tts: ^4.2.2
 
+  # Permissions
+  permission_handler: ^12.0.1
+
   # State Management
   provider: ^6.1.2
 
   # Maps
   google_maps_flutter: ^2.10.0
+  image_picker: ^1.2.2
+
+  dio: ^5.9.2
+  flutter_secure_storage: ^10.2.0
+  connectivity_plus:
+  supabase_flutter: ^2.3.0
+  sensors_plus: ^7.0.0
+
+dependency_overrides:
+  google_fonts:
+    path: packages/google_fonts_stub
 
 dev_dependencies:
   flutter_test:

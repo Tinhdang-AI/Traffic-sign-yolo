@@ -1,6 +1,6 @@
-import 'dart:ui';
-
-/// Kết quả detect từ một lần inference TFLite
+/// Kết quả detect từ một lần inference TFLite.
+/// Chỉ dùng kiểu Dart thuần (không dùng dart:ui.Rect)
+/// để đối tượng này có thể truyền qua Isolate SendPort.
 class DetectionResult {
   /// Nhãn nhận diện được (ví dụ: "STOP", "SPEED_LIMIT_60")
   final String label;
@@ -8,8 +8,11 @@ class DetectionResult {
   /// Độ tin cậy từ 0.0 đến 1.0
   final double confidence;
 
-  /// Bounding box chuẩn hóa 0.0–1.0 (top, left, bottom, right)
-  final Rect boundingBox;
+  /// Bounding box chuẩn hóa 0.0–1.0
+  final double left;
+  final double top;
+  final double right;
+  final double bottom;
 
   /// Thời điểm phát hiện
   final DateTime timestamp;
@@ -17,9 +20,15 @@ class DetectionResult {
   const DetectionResult({
     required this.label,
     required this.confidence,
-    required this.boundingBox,
+    required this.left,
+    required this.top,
+    required this.right,
+    required this.bottom,
     required this.timestamp,
   });
+
+  double get width  => right - left;
+  double get height => bottom - top;
 
   /// Nhãn đẹp để hiển thị lên UI
   String get displayLabel {
@@ -56,7 +65,7 @@ class DetectionResult {
   /// Phần trăm để hiển thị (ví dụ: "97%")
   String get confidenceText => '${(confidence * 100).toInt()}%';
 
-  /// Chỉ lấy tốc độ giới hạn nếu là biển tốc độ (trả về null nếu không phải)
+  /// Chỉ lấy tốc độ giới hạn nếu là biển tốc độ
   int? get speedLimit {
     if (label.startsWith('SPEED_LIMIT_')) {
       return int.tryParse(label.replaceFirst('SPEED_LIMIT_', ''));
@@ -65,6 +74,5 @@ class DetectionResult {
   }
 
   @override
-  String toString() =>
-      'DetectionResult(label: $label, confidence: ${confidenceText})';
+  String toString() => 'DetectionResult(label: $label, confidence: $confidenceText)';
 }

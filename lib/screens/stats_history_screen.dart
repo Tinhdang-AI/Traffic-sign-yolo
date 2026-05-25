@@ -1,90 +1,100 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
-import '../theme/app_colors.dart';
+import '../services/database_service.dart';
+import '../widgets/traffic_sign_icon.dart';
+import 'package:provider/provider.dart';
+import '../controllers/settings_provider.dart';
+import '../core/utils/sign_translator.dart';
 
 class StatsHistoryScreen extends StatefulWidget {
   const StatsHistoryScreen({super.key});
+
   @override
   State<StatsHistoryScreen> createState() => _StatsHistoryScreenState();
 }
 
-class _StatsHistoryScreenState extends State<StatsHistoryScreen>
-    with SingleTickerProviderStateMixin {
-  late final TabController _tab;
+class _StatsHistoryScreenState extends State<StatsHistoryScreen> {
+  List<HistoryItem> _history = [];
+  bool _isLoading = true;
+
   @override
   void initState() {
     super.initState();
-    _tab = TabController(length: 2, vsync: this);
+    _loadHistory();
+    DatabaseService.historyChangeNotifier.addListener(_loadHistory);
   }
 
   @override
   void dispose() {
-    _tab.dispose();
+    DatabaseService.historyChangeNotifier.removeListener(_loadHistory);
     super.dispose();
   }
 
-  @override
-  Widget build(BuildContext context) {
-    final top = MediaQuery.of(context).padding.top;
-    return Scaffold(
-      backgroundColor: AppColors.background,
-      body: Column(
-        children: [
-          _buildHeader(top),
-          Expanded(
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.fromLTRB(16, 16, 16, 100),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _MetricRow(),
-                  const SizedBox(height: 20),
-                  _SectionTitle(
-                    title: 'Biểu đồ tốc độ',
-                    subtitle: 'Chuyến đi gần nhất (km/h)',
-                  ),
-                  const SizedBox(height: 12),
-                  _SpeedChart(),
-                  const SizedBox(height: 20),
-                  _SectionTitle(
-                    title: 'Sự kiện quan trọng',
-                    subtitle: 'Phát hiện trong 7 ngày qua',
-                  ),
-                  const SizedBox(height: 12),
-                  _EventCard(
-                    icon: Icons.block,
-                    iconColor: AppColors.tertiaryContainer,
-                    title: 'Biển Dừng',
-                    time: 'Hôm nay, 08:42',
-                    location: 'Nguyễn Huệ & Lê Lợi',
-                    count: '3 lần',
-                  ),
-                  const SizedBox(height: 8),
-                  _EventCard(
-                    icon: Icons.speed,
-                    iconColor: AppColors.primaryContainer,
-                    title: 'Vượt tốc độ',
-                    time: 'Hôm qua, 17:15',
-                    location: 'Xa lộ Hà Nội',
-                    count: '1 lần',
-                  ),
-                  const SizedBox(height: 8),
-                  _EventCard(
-                    icon: Icons.warning_amber,
-                    iconColor: AppColors.secondaryContainer,
-                    title: 'Người đi bộ',
-                    time: '11/05, 09:00',
-                    location: 'Phạm Văn Đồng',
-                    count: '5 lần',
-                  ),
-                  const SizedBox(height: 20),
-                  _SectionTitle(
-                    title: 'Phân tích AI',
-                    subtitle: 'Đánh giá hành vi lái xe',
-                  ),
-                  const SizedBox(height: 12),
-                  _AIAnalysisCard(),
-                ],
+  Future<void> _loadHistory() async {
+    final history = await DatabaseService().getDetectionHistory();
+    if (mounted) {
+      setState(() {
+        _history = history;
+        _isLoading = false;
+      });
+    }
+  }
+
+  Future<void> _clearAllHistory() async {
+    setState(() {
+      _isLoading = true;
+    });
+    await DatabaseService().clearDetectionHistory();
+    await _loadHistory();
+  }
+
+  void _showClearDialog(BuildContext context) {
+    final isEn = context.read<SettingsProvider>().isEnglish;
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF17181D),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+          side: BorderSide(color: Colors.white.withOpacity(0.08)),
+        ),
+        title: Text(
+          isEn ? 'Clear scan history?' : 'Xóa lịch sử quét?',
+          style: GoogleFonts.inter(
+            color: Colors.white,
+            fontWeight: FontWeight.bold,
+            fontSize: 18,
+          ),
+        ),
+        content: Text(
+          isEn ? 'All scanned traffic signs will be permanently deleted and cannot be recovered.' : 'Tất cả lịch sử quét biển báo sẽ bị xóa vĩnh viễn và không thể khôi phục.',
+          style: GoogleFonts.inter(
+            color: Colors.white70,
+            fontSize: 13,
+            height: 1.4,
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text(
+              isEn ? 'Cancel' : 'Hủy',
+              style: GoogleFonts.inter(
+                color: Colors.white38,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context);
+              _clearAllHistory();
+            },
+            child: Text(
+              isEn ? 'Clear all' : 'Xóa tất cả',
+              style: GoogleFonts.inter(
+                color: Colors.redAccent,
+                fontWeight: FontWeight.bold,
               ),
             ),
           ),
@@ -93,14 +103,49 @@ class _StatsHistoryScreenState extends State<StatsHistoryScreen>
     );
   }
 
-  Widget _buildHeader(double top) {
+  @override
+  Widget build(BuildContext context) {
+    final top = MediaQuery.of(context).padding.top;
+    final isEn = context.watch<SettingsProvider>().isEnglish;
+    return Scaffold(
+      backgroundColor: const Color(0xFF0C0C0E),
+      body: Column(
+        children: [
+          _buildHeader(top, isEn, context),
+          Expanded(
+            child: _isLoading
+                ? const Center(
+                    child: CircularProgressIndicator(
+                      color: Color(0xFF60A5FA),
+                    ),
+                  )
+                : _history.isEmpty
+                    ? _buildEmptyState(isEn)
+                    : RefreshIndicator(
+                        onRefresh: _loadHistory,
+                        color: const Color(0xFF60A5FA),
+                        backgroundColor: const Color(0xFF17181D),
+                        child: ListView.separated(
+                          padding: const EdgeInsets.fromLTRB(16, 16, 16, 100),
+                          itemCount: _history.length,
+                          separatorBuilder: (_, __) => const SizedBox(height: 12),
+                          itemBuilder: (context, index) {
+                            final item = _history[index];
+                            return _HistoryCard(item: item, isEn: isEn);
+                          },
+                        ),
+                      ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildHeader(double top, bool isEn, BuildContext context) {
     return Container(
-      padding: EdgeInsets.only(top: top + 8, left: 16, right: 16, bottom: 16),
-      decoration: BoxDecoration(
-        color: AppColors.surfaceContainer,
-        border: Border(
-          bottom: BorderSide(color: Colors.white.withOpacity(0.07)),
-        ),
+      padding: EdgeInsets.only(top: top + 16, left: 16, right: 16, bottom: 8),
+      decoration: const BoxDecoration(
+        color: Color(0xFF0C0C0E),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -108,38 +153,87 @@ class _StatsHistoryScreenState extends State<StatsHistoryScreen>
           Row(
             children: [
               const Icon(
-                Icons.satellite_alt,
-                color: AppColors.primary,
-                size: 18,
+                Icons.access_time_rounded,
+                color: Colors.white38,
+                size: 14,
               ),
-              const SizedBox(width: 8),
+              const SizedBox(width: 6),
               Text(
-                'SENTINEL AI',
+                isEn ? 'SCAN HISTORY' : 'LỊCH SỬ QUÉT',
                 style: GoogleFonts.inter(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: 3.5,
-                  color: AppColors.primary,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 1.5,
+                  color: Colors.white54,
                 ),
               ),
               const Spacer(),
-              _HeaderChip(label: 'THỐNG KÊ & LỊCH SỬ'),
+              if (_history.isNotEmpty) ...[
+                IconButton(
+                  icon: const Icon(
+                    Icons.delete_sweep_outlined,
+                    color: Colors.redAccent,
+                    size: 20,
+                  ),
+                  onPressed: () => _showClearDialog(context),
+                  tooltip: 'Xóa tất cả lịch sử',
+                  constraints: const BoxConstraints(),
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                ),
+                const SizedBox(width: 4),
+              ],
+              _HeaderChip(label: isEn ? '${_history.length} SIGNS' : '${_history.length} BIỂN BÁO'),
             ],
           ),
-          const SizedBox(height: 14),
+          const SizedBox(height: 16),
           Text(
-            'Phân tích & Thống kê',
+            isEn ? 'Detection History' : 'Lịch sử nhận diện',
             style: GoogleFonts.inter(
-              fontSize: 22,
-              fontWeight: FontWeight.w700,
-              color: AppColors.onSurface,
+              fontSize: 28,
+              fontWeight: FontWeight.w800,
+              color: Colors.white,
+              letterSpacing: -0.5,
             ),
           ),
+          const SizedBox(height: 4),
           Text(
-            'Dữ liệu hành trình và hiệu suất an toàn gần đây.',
+            isEn ? 'List of scanned traffic signs.' : 'Danh sách các biển báo giao thông đã quét được.',
+            style: GoogleFonts.inter(
+              fontSize: 12.5,
+              color: Colors.white38,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildEmptyState(bool isEn) {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(
+            Icons.history_toggle_off_rounded,
+            size: 64,
+            color: Colors.white24,
+          ),
+          const SizedBox(height: 16),
+          Text(
+            isEn ? 'No scan history' : 'Chưa có lịch sử quét',
+            style: GoogleFonts.inter(
+              fontSize: 16,
+              fontWeight: FontWeight.w600,
+              color: Colors.white38,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            isEn ? 'Scanned signs will appear here.' : 'Các biển báo đã quét sẽ hiển thị tại đây.',
             style: GoogleFonts.inter(
               fontSize: 12,
-              color: AppColors.onSurfaceVariant.withOpacity(0.7),
+              color: Colors.white24,
             ),
           ),
         ],
@@ -151,432 +245,203 @@ class _StatsHistoryScreenState extends State<StatsHistoryScreen>
 class _HeaderChip extends StatelessWidget {
   final String label;
   const _HeaderChip({required this.label});
+
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
       decoration: BoxDecoration(
-        color: AppColors.primaryContainer.withOpacity(0.2),
+        color: const Color(0xFF17253D), // Dark navy blue from screenshot
         borderRadius: BorderRadius.circular(8),
       ),
       child: Text(
-        label,
+        SignTranslator.translate(label, context.watch<SettingsProvider>().isEnglish),
         style: GoogleFonts.inter(
-          fontSize: 8,
-          fontWeight: FontWeight.w700,
-          letterSpacing: 1.2,
-          color: AppColors.primary,
+          fontSize: 11,
+          fontWeight: FontWeight.w800,
+          color: const Color(0xFF60A5FA), // Light blue text from screenshot
+          letterSpacing: 0.5,
         ),
       ),
     );
   }
 }
 
-class _SectionTitle extends StatelessWidget {
-  final String title, subtitle;
-  const _SectionTitle({required this.title, required this.subtitle});
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          title,
-          style: GoogleFonts.inter(
-            fontSize: 16,
-            fontWeight: FontWeight.w700,
-            color: AppColors.onSurface,
-          ),
-        ),
-        Text(
-          subtitle,
-          style: GoogleFonts.inter(
-            fontSize: 11,
-            color: AppColors.onSurfaceVariant.withOpacity(0.6),
-          ),
-        ),
-      ],
-    );
+class _HistoryCard extends StatelessWidget {
+  final HistoryItem item;
+  final bool isEn;
+  
+  const _HistoryCard({required this.item, required this.isEn});
+
+  String _formatTime(DateTime time) {
+    return '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')} - ${time.day.toString().padLeft(2, '0')}/${time.month.toString().padLeft(2, '0')}';
   }
-}
 
-class _MetricRow extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Expanded(
-          child: _MetricCard(
-            value: '98',
-            unit: '%',
-            label: 'Độ chính xác nhận diện',
-            change: '+2.4%',
-            changePositive: true,
-            icon: Icons.verified_outlined,
-            accent: AppColors.primaryContainer,
-          ),
-        ),
-        const SizedBox(width: 10),
-        Expanded(
-          child: _MetricCard(
-            value: '3',
-            unit: 'lần',
-            label: 'Can thiệp thủ công',
-            change: '-1 so với tuần trước',
-            changePositive: true,
-            icon: Icons.touch_app_outlined,
-            accent: AppColors.secondaryContainer,
-          ),
-        ),
-      ],
-    );
+  String _cleanLocationName(String loc) {
+    final parts = loc
+        .split(',')
+        .map((part) => part.trim())
+        .where((part) => part.isNotEmpty)
+        .toList();
+    return parts.isEmpty ? loc.trim() : parts.join(', ');
   }
-}
-
-class _MetricCard extends StatelessWidget {
-  final String value, unit, label, change;
-  final bool changePositive;
-  final IconData icon;
-  final Color accent;
-
-  const _MetricCard({
-    required this.value,
-    required this.unit,
-    required this.label,
-    required this.change,
-    required this.changePositive,
-    required this.icon,
-    required this.accent,
-  });
 
   @override
   Widget build(BuildContext context) {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: AppColors.surfaceContainerHigh,
+        color: const Color(0xFF17181D), // Premium dark graphite color from screenshot
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: accent.withOpacity(0.2)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(icon, color: accent, size: 20),
-          const SizedBox(height: 10),
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              Text(
-                value,
-                style: GoogleFonts.inter(
-                  fontSize: 32,
-                  fontWeight: FontWeight.w700,
-                  height: 1,
-                  color: accent,
-                ),
-              ),
-              const SizedBox(width: 3),
-              Padding(
-                padding: const EdgeInsets.only(bottom: 4),
-                child: Text(
-                  unit,
-                  style: GoogleFonts.inter(
-                    fontSize: 13,
-                    color: accent.withOpacity(0.7),
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 4),
-          Text(
-            label,
-            style: GoogleFonts.inter(
-              fontSize: 11,
-              color: AppColors.onSurfaceVariant.withOpacity(0.7),
-            ),
-          ),
-          const SizedBox(height: 6),
-          Row(
-            children: [
-              Icon(
-                changePositive ? Icons.arrow_upward : Icons.arrow_downward,
-                size: 12,
-                color: changePositive
-                    ? const Color(0xFF4CAF50)
-                    : AppColors.tertiaryContainer,
-              ),
-              const SizedBox(width: 3),
-              Text(
-                change,
-                style: GoogleFonts.inter(
-                  fontSize: 10,
-                  color: changePositive
-                      ? const Color(0xFF4CAF50)
-                      : AppColors.tertiaryContainer,
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _SpeedChart extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) {
-    final speeds = [35.0, 52.0, 67.0, 45.0, 80.0, 58.0, 42.0, 70.0, 55.0, 38.0];
-    final maxSpeed = 100.0;
-    return Container(
-      height: 160,
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: AppColors.surfaceContainer,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.white.withOpacity(0.06)),
-      ),
-      child: Column(
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(
-                'Vận tốc (km/h)',
-                style: GoogleFonts.inter(
-                  fontSize: 10,
-                  color: AppColors.onSurfaceVariant.withOpacity(0.6),
-                ),
-              ),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                decoration: BoxDecoration(
-                  color: AppColors.primaryContainer.withOpacity(0.2),
-                  borderRadius: BorderRadius.circular(6),
-                ),
-                child: Text(
-                  'Giới hạn: 60 km/h',
-                  style: GoogleFonts.inter(
-                    fontSize: 9,
-                    fontWeight: FontWeight.w600,
-                    color: AppColors.primary,
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          Expanded(
-            child: CustomPaint(
-              painter: _SpeedChartPainter(speeds: speeds, maxSpeed: maxSpeed),
-              size: Size.infinite,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _SpeedChartPainter extends CustomPainter {
-  final List<double> speeds;
-  final double maxSpeed;
-  const _SpeedChartPainter({required this.speeds, required this.maxSpeed});
-
-  @override
-  void paint(Canvas canvas, Size s) {
-    final limitY = s.height * (1 - 60 / maxSpeed);
-    // Speed limit line
-    canvas.drawLine(
-      Offset(0, limitY),
-      Offset(s.width, limitY),
-      Paint()
-        ..color = AppColors.secondaryContainer.withOpacity(0.5)
-        ..strokeWidth = 1
-        ..style = PaintingStyle.stroke
-        ..strokeCap = StrokeCap.round,
-    );
-
-    final barW = s.width / (speeds.length * 2 - 1);
-    for (int i = 0; i < speeds.length; i++) {
-      final h = s.height * (speeds[i] / maxSpeed);
-      final x = i * barW * 2;
-      final isOver = speeds[i] > 60;
-      final color = isOver
-          ? AppColors.tertiaryContainer
-          : AppColors.primaryContainer;
-      final rect = RRect.fromRectAndCorners(
-        Rect.fromLTWH(x, s.height - h, barW, h),
-        topLeft: const Radius.circular(3),
-        topRight: const Radius.circular(3),
-      );
-      canvas.drawRRect(
-        rect,
-        Paint()
-          ..shader = LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [color, color.withOpacity(0.3)],
-          ).createShader(Rect.fromLTWH(x, s.height - h, barW, h)),
-      );
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter _) => false;
-}
-
-class _EventCard extends StatelessWidget {
-  final IconData icon;
-  final Color iconColor;
-  final String title, time, location, count;
-  const _EventCard({
-    required this.icon,
-    required this.iconColor,
-    required this.title,
-    required this.time,
-    required this.location,
-    required this.count,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: AppColors.surfaceContainer,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: Colors.white.withOpacity(0.05)),
+        border: Border.all(color: Colors.white.withOpacity(0.04)),
       ),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Container(
-            width: 40,
-            height: 40,
-            decoration: BoxDecoration(
-              color: iconColor.withOpacity(0.15),
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: Icon(icon, color: iconColor, size: 20),
+          // Left: TrafficSignIcon thumbnail
+          TrafficSignIcon(
+            label: item.label,
+            isEn: isEn,
+            size: 44,
           ),
-          const SizedBox(width: 12),
+          const SizedBox(width: 14),
+          // Center content
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                // Title (Sign label in bold all-caps)
                 Text(
-                  title,
+                  SignTranslator.translate(item.label, isEn),
                   style: GoogleFonts.inter(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w700,
-                    color: AppColors.onSurface,
+                    fontSize: 14.5,
+                    fontWeight: FontWeight.w800,
+                    color: Colors.white,
+                    height: 1.25,
                   ),
                 ),
-                const SizedBox(height: 2),
-                Text(
-                  '$time · $location',
-                  style: GoogleFonts.inter(
-                    fontSize: 10,
-                    color: AppColors.onSurfaceVariant.withOpacity(0.6),
-                  ),
+                const SizedBox(height: 8),
+                // Time row with access_time_rounded icon
+                Row(
+                  children: [
+                    const Icon(
+                      Icons.access_time_rounded,
+                      size: 13,
+                      color: Colors.white38,
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      _formatTime(item.timestamp),
+                      style: GoogleFonts.inter(
+                        fontSize: 11.5,
+                        color: Colors.white60,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                // Location row with location_on_outlined icon
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Icon(
+                      Icons.location_on_outlined,
+                      size: 13,
+                      color: Colors.white38,
+                    ),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        _cleanLocationName(item.displayLocationName),
+                        style: GoogleFonts.inter(
+                          fontSize: 11.5,
+                          height: 1.35,
+                          color: Colors.white60,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ],
             ),
           ),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-            decoration: BoxDecoration(
-              color: iconColor.withOpacity(0.15),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Text(
-              count,
-              style: GoogleFonts.inter(
-                fontSize: 11,
-                fontWeight: FontWeight.w700,
-                color: iconColor,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _AIAnalysisCard extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [
-            AppColors.primaryContainer.withOpacity(0.15),
-            AppColors.surfaceContainerHigh,
-          ],
-        ),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppColors.primaryContainer.withOpacity(0.25)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
+          const SizedBox(width: 8),
+          // Right: Pill-shaped confidence badge
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Container(
-                width: 36,
-                height: 36,
-                decoration: BoxDecoration(
-                  color: AppColors.primaryContainer,
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: const Icon(
-                  Icons.psychology,
-                  color: Colors.white,
+              _HistoryConfidenceBadge(confidence: item.confidence),
+              const SizedBox(height: 16),
+              IconButton(
+                icon: const Icon(
+                  Icons.delete_outline_rounded,
+                  color: Colors.redAccent,
                   size: 20,
                 ),
-              ),
-              const SizedBox(width: 10),
-              Text(
-                'Phân tích hành vi AI',
-                style: GoogleFonts.inter(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w700,
-                  color: AppColors.onSurface,
-                ),
+                onPressed: () => _showDeleteSingleDialog(context, isEn),
+                constraints: const BoxConstraints(),
+                padding: EdgeInsets.zero,
+                splashRadius: 20,
+                tooltip: 'Xóa biển báo này',
               ),
             ],
           ),
-          const SizedBox(height: 12),
-          Text(
-            'Phân tích định lượng cho thấy cải thiện 14% trong việc duy trì điểm tập trung sau sự kiện xúc giác. Xu hướng hiện tại cho thấy sự phù hợp cao với các giao thức lái xe an toàn 2024.',
-            style: GoogleFonts.inter(
-              fontSize: 12,
-              height: 1.6,
-              color: AppColors.onSurfaceVariant.withOpacity(0.85),
+        ],
+      ),
+    );
+  }
+
+  void _showDeleteSingleDialog(BuildContext context, bool isEn) {
+    showDialog(
+      context: context,
+      builder: (dialogCtx) => AlertDialog(
+        backgroundColor: const Color(0xFF17181D),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+          side: BorderSide(color: Colors.white.withOpacity(0.08)),
+        ),
+        title: Text(
+          isEn ? 'Delete this sign?' : 'Xóa biển báo này?',
+          style: GoogleFonts.inter(
+            color: Colors.white,
+            fontWeight: FontWeight.bold,
+            fontSize: 17,
+          ),
+        ),
+        content: Text(
+          isEn ? 'Are you sure you want to delete "${SignTranslator.translate(item.label, true)}" from history?' : 'Bạn có chắc chắn muốn xóa biển báo "${item.label.toUpperCase()}" này ra khỏi lịch sử không?',
+          style: GoogleFonts.inter(
+            color: Colors.white70,
+            fontSize: 13,
+            height: 1.45,
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogCtx),
+            child: Text(
+              isEn ? 'Cancel' : 'Hủy',
+              style: GoogleFonts.inter(
+                color: Colors.white38,
+                fontWeight: FontWeight.w600,
+              ),
             ),
           ),
-          const SizedBox(height: 12),
-          _ProgressBar(
-            label: 'An toàn tổng thể',
-            value: 0.94,
-            color: AppColors.primaryContainer,
-          ),
-          const SizedBox(height: 8),
-          _ProgressBar(
-            label: 'Tuân thủ tốc độ',
-            value: 0.87,
-            color: AppColors.secondaryContainer,
-          ),
-          const SizedBox(height: 8),
-          _ProgressBar(
-            label: 'Phản ứng cảnh báo',
-            value: 0.98,
-            color: const Color(0xFF4CAF50),
+          TextButton(
+            onPressed: () async {
+              Navigator.pop(dialogCtx);
+              await DatabaseService().deleteDetectionHistoryItem(item.id);
+            },
+            child: Text(
+              isEn ? 'Delete' : 'Xóa',
+              style: GoogleFonts.inter(
+                color: Colors.redAccent,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
           ),
         ],
       ),
@@ -584,51 +449,45 @@ class _AIAnalysisCard extends StatelessWidget {
   }
 }
 
-class _ProgressBar extends StatelessWidget {
-  final String label;
-  final double value;
-  final Color color;
-  const _ProgressBar({
-    required this.label,
-    required this.value,
-    required this.color,
-  });
+class _HistoryConfidenceBadge extends StatelessWidget {
+  final double confidence;
+  const _HistoryConfidenceBadge({required this.confidence});
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      children: [
-        SizedBox(
-          width: 130,
-          child: Text(
-            label,
+    final confPercent = (confidence * 100).toInt().clamp(0, 100);
+    final bool isHigh = confidence >= 0.70;
+    
+    final Color badgeColor = isHigh ? const Color(0xFF10B981) : const Color(0xFFF59E0B);
+    final Color backgroundColor = badgeColor.withOpacity(0.08);
+    final IconData iconData = isHigh ? Icons.check_circle : Icons.info_outline;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      decoration: BoxDecoration(
+        color: backgroundColor,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: badgeColor.withOpacity(0.3), width: 1),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            iconData,
+            size: 12,
+            color: badgeColor,
+          ),
+          const SizedBox(width: 4),
+          Text(
+            '$confPercent%',
             style: GoogleFonts.inter(
               fontSize: 11,
-              color: AppColors.onSurfaceVariant.withOpacity(0.7),
+              fontWeight: FontWeight.w700,
+              color: badgeColor,
             ),
           ),
-        ),
-        Expanded(
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(4),
-            child: LinearProgressIndicator(
-              value: value,
-              backgroundColor: AppColors.outlineVariant.withOpacity(0.3),
-              valueColor: AlwaysStoppedAnimation<Color>(color),
-              minHeight: 6,
-            ),
-          ),
-        ),
-        const SizedBox(width: 8),
-        Text(
-          '${(value * 100).toInt()}%',
-          style: GoogleFonts.inter(
-            fontSize: 11,
-            fontWeight: FontWeight.w700,
-            color: color,
-          ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 }

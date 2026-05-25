@@ -5,13 +5,24 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:camera/camera.dart';
 import 'package:geolocator/geolocator.dart';
-import '../theme/app_colors.dart';
+import '../core/theme/app_colors.dart';
 import '../services/detection_service.dart';
 import '../services/location_service.dart';
+import '../services/voice_guidance_service.dart';
+import '../services/nextjs_api_service.dart';
 import '../models/detection_result.dart';
+import '../widgets/traffic_sign_icon.dart';
+import '../widgets/confidence_badge.dart';
+import '../services/database_service.dart';
+import '../core/utils/sign_translator.dart';
+import '../services/traffic_rule_engine.dart';
+import '../services/hybrid_speed_limit_service.dart';
+import 'package:provider/provider.dart';
+import '../controllers/settings_provider.dart';
 
 class ARDetectionScreen extends StatefulWidget {
   const ARDetectionScreen({super.key});
+
   @override
   State<ARDetectionScreen> createState() => _ARDetectionScreenState();
 }
@@ -21,19 +32,40 @@ class _ARDetectionScreenState extends State<ARDetectionScreen>
   late final AnimationController _pulseCtrl;
   late final AnimationController _waveCtrl;
   late final Animation<double> _pulse;
-  static const int _stableFrameThreshold = 2;
-  static const double _stableConfidenceThreshold = 0.80;
-  static const double _confidenceSmoothingFactor = 0.35;
+
+  static const int _stableFrameThreshold = 0;
+  static const double _stableConfidenceThreshold = 0.65;
+  static const double _confidenceSmoothingFactor = 0.50;
 
   CameraController? _cameraController;
   Timer? _detectionTimer;
   List<DetectionResult> _detections = [];
   bool _isProcessing = false;
+  bool _isReporting = false;
   Position? _currentPosition;
   double _currentSpeed = 0.0;
   StreamSubscription<Position>? _positionSubscription;
   final Map<String, int> _labelStreak = {};
   final Map<String, double> _smoothedConfidence = {};
+
+  // Voice Guidance switch
+  bool _isTtsEnabled = true;
+
+  // Continuous Scan switch
+  bool _isScanContinuous = true;
+
+  StreamSubscription<int?>? _hybridSubscription;
+
+  String? _activeSpeedLimit;
+
+  // TTS Cooldowns per label to prevent spamming
+  final Map<String, DateTime> _spokenSignsCooldown = {};
+
+  // History saving cooldowns per label
+  final Map<String, DateTime> _lastSavedHistory = {};
+
+  // API service
+  final _apiService = NestJsApiService();
 
   @override
   void initState() {
@@ -56,13 +88,39 @@ class _ARDetectionScreenState extends State<ARDetectionScreen>
   }
 
   Future<void> _initParams() async {
-    await _initCameraAndModel();
+    HybridSpeedLimitService.instance.initialize();
+    _hybridSubscription = HybridSpeedLimitService.instance.hybridSpeedStream.listen((speed) {
+      if (mounted) {
+        setState(() {
+          _activeSpeedLimit = speed?.toString();
+        });
+      }
+    });
+
     await _initLocation();
+    await _initCameraAndModel();
   }
 
   Future<void> _initLocation() async {
     final hasPermission = await LocationService.instance.startTracking();
     if (hasPermission) {
+      // Get the last known or current position immediately so it is not null from the start
+      try {
+        final pos = await Geolocator.getLastKnownPosition() ?? 
+                    await Geolocator.getCurrentPosition(
+                      desiredAccuracy: LocationAccuracy.high,
+                      timeLimit: const Duration(seconds: 3),
+                    );
+        if (mounted) {
+          setState(() {
+            _currentPosition = pos;
+            _currentSpeed = LocationService.instance.currentSpeedKmH;
+          });
+        }
+      } catch (e) {
+        print('🎤 [ARDetectionScreen] Failed to get instant position: $e');
+      }
+
       _positionSubscription = LocationService.instance.positionStream.listen((
         position,
       ) {
@@ -72,37 +130,46 @@ class _ARDetectionScreenState extends State<ARDetectionScreen>
             _currentSpeed = LocationService.instance.currentSpeedKmH;
           });
         }
+        HybridSpeedLimitService.instance.updateLocation(position);
       });
     }
   }
 
   Future<void> _initCameraAndModel() async {
-    // Load Model
-    await DetectionService.instance.initialize();
+    try {
+      // 1. Load Model
+      await DetectionService.instance.initialize();
 
-    // Setup Camera
-    final cameras = await availableCameras();
-    if (cameras.isEmpty) return;
+      // 2. Setup Camera
+      final cameras = await availableCameras();
+      if (cameras.isEmpty) {
+        print('🎤 [Camera] No cameras available');
+        return;
+      }
 
-    _cameraController = CameraController(
-      cameras[0],
-      ResolutionPreset.medium,
-      enableAudio: false,
-      imageFormatGroup: ImageFormatGroup.jpeg, // Hỗ trợ chụp ảnh jpeg tốt hơn
-    );
+      _cameraController = CameraController(
+        cameras[0],
+        ResolutionPreset.medium,
+        enableAudio: false,
+        imageFormatGroup: ImageFormatGroup.jpeg,
+      );
 
-    await _cameraController!.initialize();
-    if (!mounted) return;
-    setState(() {});
+      await _cameraController!.initialize();
+      if (!mounted) return;
+      setState(() {});
 
-    // Chạy loop lấy frame từ camera thay vì dùng startImageStream để tối ưu hiệu năng
-    _detectionTimer = Timer.periodic(const Duration(milliseconds: 700), (_) {
-      _processFrame();
-    });
+      // Use startImageStream instead of takePicture() + Timer to avoid disk I/O delay
+      await _cameraController!.startImageStream((CameraImage image) {
+        _processFrameFromStream(image);
+      });
+    } catch (e) {
+      print('🎤 [Camera/Model] Init Error: $e');
+    }
   }
 
-  Future<void> _processFrame() async {
-    if (_isProcessing ||
+  Future<void> _processFrameFromStream(CameraImage image) async {
+    if (!_isScanContinuous ||
+        _isProcessing ||
         _cameraController == null ||
         !_cameraController!.value.isInitialized) {
       return;
@@ -110,24 +177,143 @@ class _ARDetectionScreenState extends State<ARDetectionScreen>
 
     _isProcessing = true;
     try {
-      final file = await _cameraController!.takePicture();
-      final bytes = await file.readAsBytes();
-
-      // Xoá file tạm
-      try {
-        File(file.path).deleteSync();
-      } catch (_) {}
+      // Extract JPEG bytes from stream (since ImageFormatGroup.jpeg is used)
+      final bytes = image.planes[0].bytes;
 
       final results = await DetectionService.instance.detect(bytes);
       if (mounted) {
+        final stabilized = _stabilizeDetections(results);
         setState(() {
-          _detections = _stabilizeDetections(results);
+          _detections = stabilized;
         });
+
+        if (stabilized.isNotEmpty) {
+          // 1. Update speed limit based on all detected signs via Rule Engine
+          for (final d in stabilized) {
+            TrafficRuleEngine.instance.processDetection(d.label);
+          }
+
+          // 2. Speak all new stable warnings
+          final List<String> labels = stabilized.map((d) => d.label).toList();
+          _speakDetectedSigns(labels);
+
+          // 3. Save all new stable warnings to SQLite History Database
+          unawaited(_saveDetectionsToHistory(stabilized));
+        }
       }
     } catch (e) {
-      print('Lỗi xử lý frame: $e');
+      print('🎤 [Detection] Error processing frame: $e');
     } finally {
       _isProcessing = false;
+    }
+  }
+
+  void _speakDetectedSigns(List<String> labels) {
+    if (!_isTtsEnabled) return;
+
+    final now = DateTime.now();
+    final signsToSpeak = <String>[];
+    final isEn = context.read<SettingsProvider>().isEnglish;
+
+    for (final label in labels) {
+      final lastSpoken = _spokenSignsCooldown[label];
+      if (lastSpoken == null || now.difference(lastSpoken) > const Duration(minutes: 5)) {
+        _spokenSignsCooldown[label] = now;
+        signsToSpeak.add(label);
+      }
+    }
+
+    if (signsToSpeak.isNotEmpty) {
+      final spokenText = signsToSpeak.map((l) => SignTranslator.translate(l, isEn)).join(isEn ? ' and ' : ' và ');
+      VoiceGuidanceService().speakTrafficSign(spokenText, isEn: isEn);
+    }
+  }
+
+  Future<void> _reportDetection(DetectionResult detection) async {
+    if (_currentPosition == null) {
+      // ApiErrorHandler.showErrorSnackBar(
+      //   context,
+      //   'Location not available',
+      // );
+      return;
+    }
+
+    setState(() => _isReporting = true);
+    try {
+      await _apiService.createReport(
+        name: 'AR Detection - ${detection.label}',
+        latitude: _currentPosition!.latitude,
+        longitude: _currentPosition!.longitude,
+        violationType: _mapDetectionToViolationType(detection.label),
+        description:
+            'Detected via AR Camera with ${(_displayConfidence(detection.label, detection.confidence) * 100).toInt()}% confidence',
+      );
+
+    } finally {
+      if (mounted) {
+        setState(() => _isReporting = false);
+      }
+    }
+  }
+
+  String _mapDetectionToViolationType(String label) {
+    final lower = label.toLowerCase();
+    if (lower.contains('tốc độ')) return 'speed_limit';
+    if (lower.contains('cấm')) return 'prohibition';
+    if (lower.contains('chiều')) return 'direction';
+    if (lower.contains('dừng') || lower.contains('stop')) return 'stop';
+    if (lower.contains('nhường')) return 'yield';
+    return 'other';
+  }
+
+
+  Future<void> _saveDetectionsToHistory(List<DetectionResult> detections) async {
+    final now = DateTime.now();
+    double lat = 10.7769; // TP. Hồ Chí Minh coordinates as a realistic default fallback
+    double lng = 106.7009;
+    String locationName = '';
+
+    if (_currentPosition != null) {
+      lat = _currentPosition!.latitude;
+      lng = _currentPosition!.longitude;
+    } else {
+      // Dò vị trí nhanh nếu chưa có tín hiệu stream
+      try {
+        final pos = await Geolocator.getLastKnownPosition() ?? 
+                    await Geolocator.getCurrentPosition(
+                      desiredAccuracy: LocationAccuracy.high,
+                      timeLimit: const Duration(seconds: 2),
+                    );
+        _currentPosition = pos;
+        lat = pos.latitude;
+        lng = pos.longitude;
+      } catch (_) {
+        locationName = "Đang kết nối GPS...";
+      }
+    }
+
+    if (locationName.isEmpty || locationName == "Đang kết nối GPS...") {
+      try {
+        locationName = await LocationService.instance.getAddressFromCoordinates(lat, lng);
+      } catch (_) {}
+      if (locationName.isEmpty || locationName.startsWith('Tọa độ')) {
+        locationName = LocationService.getMockLocationNameStatic(lat, lng);
+      }
+    }
+
+    for (final d in detections) {
+      final lastSaved = _lastSavedHistory[d.label];
+      if (lastSaved == null || now.difference(lastSaved) > const Duration(minutes: 5)) {
+        _lastSavedHistory[d.label] = now;
+        
+        await DatabaseService().addDetectionHistory(
+          label: d.label,
+          confidence: _displayConfidence(d.label, d.confidence),
+          latitude: lat,
+          longitude: lng,
+          locationName: locationName,
+        );
+      }
     }
   }
 
@@ -185,11 +371,11 @@ class _ARDetectionScreenState extends State<ARDetectionScreen>
 
   @override
   void dispose() {
-    _detectionTimer?.cancel();
+    _hybridSubscription?.cancel();
+    HybridSpeedLimitService.instance.dispose();
     _positionSubscription?.cancel();
     LocationService.instance.stopTracking();
     _cameraController?.dispose();
-    DetectionService.instance.dispose();
     _pulseCtrl.dispose();
     _waveCtrl.dispose();
     super.dispose();
@@ -199,90 +385,176 @@ class _ARDetectionScreenState extends State<ARDetectionScreen>
   Widget build(BuildContext context) {
     final size = MediaQuery.of(context).size;
     final top = MediaQuery.of(context).padding.top;
+    final isEn = context.watch<SettingsProvider>().isEnglish;
 
     return Scaffold(
       backgroundColor: Colors.black,
       body: Stack(
         children: [
-          // Camera preview
+          // 1. Camera Preview
           if (_cameraController != null &&
               _cameraController!.value.isInitialized)
             SizedBox.expand(
               child: FittedBox(
                 fit: BoxFit.cover,
                 child: SizedBox(
-                  width:
-                      _cameraController!.value.previewSize?.height ??
-                      size.width,
-                  height:
-                      _cameraController!.value.previewSize?.width ??
-                      size.height,
+                  width: _cameraController!.value.previewSize?.height ?? size.width,
+                  height: _cameraController!.value.previewSize?.width ?? size.height,
                   child: CameraPreview(_cameraController!),
                 ),
               ),
             )
           else
-            SizedBox.expand(child: CustomPaint(painter: _RoadPainter())),
+            SizedBox.expand(
+              child: Container(
+                color: const Color(0xFF020617),
+                child: Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      const SizedBox(
+                        width: 48,
+                        height: 48,
+                        child: CircularProgressIndicator(
+                          color: AppColors.primary,
+                          strokeWidth: 3,
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      Text(
+                        isEn ? 'INITIALIZING SYSTEM...' : 'ĐANG KHỞI TẠO HỆ THỐNG...',
+                        style: GoogleFonts.inter(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                          color: Colors.white54,
+                          letterSpacing: 2,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
 
-          // AR ribbon
-          Positioned.fill(child: CustomPaint(painter: _RibbonPainter())),
+          // AR scanning corners and target crosshair
+          Positioned.fill(
+              child: CustomPaint(
+                painter: _ScanningOverlayPainter(
+                  pulseValue: _isScanContinuous ? _pulse.value : 0.5,
+                  isScanning: _isScanContinuous,
+                ),
+              ),
+            ),
 
-          // Detection boxes
-          ..._detections.map((d) {
-            final left = d.boundingBox.left * size.width;
-            final topBox = d.boundingBox.top * size.height;
+          // 2. Dynamic Target bounding boxes
+          if (_isScanContinuous) ..._detections.map((d) {
+            final left = d.left * size.width;
+            final topBox = d.top * size.height;
+            final boxWidth = d.width * size.width;
+            final boxHeight = d.height * size.height;
             return Positioned(
               left: left,
               top: topBox,
               child: _DetectionBox(
                 label: d.displayLabel.isNotEmpty ? d.displayLabel : d.label,
-                conf:
-                    '${(_displayConfidence(d.label, d.confidence) * 100).toInt()}%',
-                borderColor: AppColors.tertiaryContainer,
-                glowColor: AppColors.tertiaryContainer,
-                alpha: 1.0,
-                icon: Icons.warning_amber_rounded,
-                iconBg: AppColors.tertiaryContainer,
+                conf: '${(_displayConfidence(d.label, d.confidence) * 100).toInt()}%',
+                borderColor: AppColors.primary,
+                glowColor: AppColors.primary,
+                alpha: _pulse.value,
+                isEn: isEn,
+                width: boxWidth,
+                height: boxHeight,
               ),
             );
           }),
 
-          // Top bar
-          _buildTopBar(top),
+          // 3. Floating Header (Title & GPS status)
+          _buildHeader(top, isEn),
 
-          // Warning alert top right
-          if (_detections.isNotEmpty)
+          // 4. Warning alerts at top center (displays all stabilized warnings)
+          if (_isScanContinuous && _detections.isNotEmpty)
             Positioned(
-              top: top + 16,
+              top: top + kToolbarHeight + 16,
+              left: 16,
               right: 16,
-              child: _AlertWarning(
-                label: _detections.first.label,
-                confidence: _displayConfidence(
-                  _detections.first.label,
-                  _detections.first.confidence,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: _detections.take(3).map((d) {
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 8.0),
+                    child: _AlertWarning(
+                      label: d.label,
+                      confidence: _displayConfidence(d.label, d.confidence),
+                    ),
+                  );
+                }).toList(),
+              ),
+            ),
+
+          // 5. Left speed card HUD
+          Positioned(
+            left: 16,
+            bottom: 120,
+            child: _SpeedHUD(
+              speed: _currentSpeed,
+              speedLimit: _activeSpeedLimit,
+            ),
+          ),
+
+          // 5.5 Report Detection button (when detection exists)
+          if (_detections.isNotEmpty && !_isReporting)
+            Positioned(
+              left: 16,
+              bottom: 40,
+              child: ElevatedButton.icon(
+                onPressed: () => _reportDetection(_detections.first),
+                icon: Icon(Icons.send, size: 18),
+                label: Text(isEn ? 'Report' : 'Báo cáo'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.red.shade600,
+                  foregroundColor: Colors.white,
+                  padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                 ),
               ),
             ),
 
-          // Speed HUD left
+          // 6. Right toggle cards HUD
           Positioned(
-            left: 16,
-            bottom: 108,
-            child: _SpeedHUD(speed: _currentSpeed),
+            right: 16,
+            bottom: 120,
+            child: _QuickControlsHUD(
+              isScanContinuous: _isScanContinuous,
+              onScanChanged: (val) {
+                setState(() {
+                  _isScanContinuous = val;
+                  if (!val) {
+                    _detections.clear(); // Clear boxes when paused
+                    _labelStreak.clear();
+                    _smoothedConfidence.clear();
+                  }
+                });
+              },
+              voiceEnabled: _isTtsEnabled,
+              onVoiceChanged: (val) {
+                setState(() {
+                  _isTtsEnabled = val;
+                });
+              },
+            ),
           ),
 
-          // Nav HUD right
-          Positioned(right: 16, bottom: 108, child: _NavHUD()),
-
-          // Voice wave center
+          // 7. Dynamic voice analyzer wave in the bottom center
           Positioned(
-            bottom: 100,
+            bottom: 110,
             left: 0,
             right: 0,
             child: Center(
               child: AnimatedBuilder(
                 animation: _waveCtrl,
-                builder: (_, __) => _VoiceWave(t: _waveCtrl.value),
+                builder: (_, __) => _VoiceWave(
+                  t: _waveCtrl.value,
+                  isScanning: _isScanContinuous,
+                ),
               ),
             ),
           ),
@@ -291,7 +563,7 @@ class _ARDetectionScreenState extends State<ARDetectionScreen>
     );
   }
 
-  Widget _buildTopBar(double top) {
+  Widget _buildHeader(double top, bool isEn) {
     return Positioned(
       top: 0,
       left: 0,
@@ -299,379 +571,55 @@ class _ARDetectionScreenState extends State<ARDetectionScreen>
       child: Container(
         height: top + kToolbarHeight,
         padding: EdgeInsets.only(top: top, left: 16, right: 16),
-        color: AppColors.surfaceContainer.withOpacity(0.70),
+        decoration: BoxDecoration(
+          color: const Color(0xFF020617).withOpacity(0.4),
+          border: Border(
+            bottom: BorderSide(color: Colors.white.withOpacity(0.04)),
+          ),
+        ),
         child: Row(
           children: [
-            const Icon(Icons.satellite_alt, color: AppColors.primary, size: 20),
+            const Icon(
+              Icons.satellite_alt_rounded,
+              color: AppColors.primary,
+              size: 20,
+            ),
             const SizedBox(width: 8),
             Text(
               'SENTINEL AI',
               style: GoogleFonts.inter(
-                fontSize: 13,
-                fontWeight: FontWeight.w700,
+                fontSize: 14,
+                fontWeight: FontWeight.w900,
                 letterSpacing: 4,
-                color: AppColors.primary,
+                color: Colors.white,
               ),
             ),
-            // const Spacer(),
-            // Column(
-            //   mainAxisAlignment: MainAxisAlignment.center,
-            //   crossAxisAlignment: CrossAxisAlignment.end,
-            //   children: [
-            //     Text(
-            //       'GPS ACTIVE',
-            //       style: GoogleFonts.inter(
-            //         fontSize: 10,
-            //         fontWeight: FontWeight.w700,
-            //         letterSpacing: 1.5,
-            //         color: AppColors.primary,
-            //       ),
-            //     ),
-            //     Text(
-            //       _currentPosition != null
-            //           ? 'LAT: ${_currentPosition!.latitude.toStringAsFixed(4)}°'
-            //           : 'SEARCHING...',
-            //       style: GoogleFonts.inter(
-            //         fontSize: 9,
-            //         color: AppColors.onSurfaceVariant.withOpacity(0.55),
-            //       ),
-            //     ),
-            //   ],
-            // ),
-            // const SizedBox(width: 8),
-            // const Icon(
-            //   Icons.signal_cellular_alt,
-            //   color: AppColors.primary,
-            //   size: 18,
-            // ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _RoadPainter extends CustomPainter {
-  @override
-  void paint(Canvas canvas, Size s) {
-    canvas.drawRect(Offset.zero & s, Paint()..color = const Color(0xFF0A0F1A));
-    final skyR = Rect.fromLTWH(0, 0, s.width, s.height * 0.56);
-    canvas.drawRect(
-      skyR,
-      Paint()
-        ..shader = const LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [Color(0xFF0B1120), Color(0xFF16253A)],
-        ).createShader(skyR),
-    );
-
-    final roadTop = s.height * 0.52;
-    final roadPath = Path()
-      ..moveTo(0, s.height)
-      ..lineTo(s.width, s.height)
-      ..lineTo(s.width * 0.75, roadTop)
-      ..lineTo(s.width * 0.25, roadTop)
-      ..close();
-    canvas.drawPath(
-      roadPath,
-      Paint()
-        ..shader = LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [const Color(0xFF1A2030), const Color(0xFF22293A)],
-        ).createShader(Rect.fromLTWH(0, roadTop, s.width, s.height - roadTop)),
-    );
-
-    final dp = Paint()
-      ..color = Colors.white.withOpacity(0.35)
-      ..strokeWidth = 3;
-    for (int i = 0; i < 7; i++) {
-      final y1 = s.height * 0.58 + i * 46.0;
-      final y2 = y1 + 26;
-      if (y2 > s.height) break;
-      canvas.drawLine(Offset(s.width / 2, y1), Offset(s.width / 2, y2), dp);
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter _) => false;
-}
-
-class _RibbonPainter extends CustomPainter {
-  @override
-  void paint(Canvas canvas, Size s) {
-    final path = Path()
-      ..moveTo(s.width * 0.46, s.height)
-      ..lineTo(s.width * 0.54, s.height)
-      ..lineTo(s.width * 0.52, s.height * 0.60)
-      ..lineTo(s.width * 0.48, s.height * 0.60)
-      ..close();
-    canvas.drawPath(
-      path,
-      Paint()
-        ..shader = LinearGradient(
-          begin: Alignment.bottomCenter,
-          end: Alignment.topCenter,
-          colors: [
-            AppColors.primaryContainer.withOpacity(0.40),
-            Colors.transparent,
-          ],
-        ).createShader(Rect.fromLTWH(0, 0, s.width, s.height)),
-    );
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter _) => false;
-}
-
-class _DetectionBox extends StatelessWidget {
-  final String label, conf;
-  final Color borderColor, glowColor, iconBg;
-  final double alpha;
-  final IconData icon;
-  const _DetectionBox({
-    required this.label,
-    required this.conf,
-    required this.borderColor,
-    required this.glowColor,
-    required this.alpha,
-    required this.icon,
-    required this.iconBg,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: 88,
-      height: 88,
-      decoration: BoxDecoration(
-        border: Border.all(color: borderColor.withOpacity(alpha), width: 2),
-        color: borderColor.withOpacity(0.07),
-        boxShadow: [
-          BoxShadow(color: glowColor.withOpacity(alpha * 0.6), blurRadius: 14),
-        ],
-      ),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Text(
-            label,
-            textAlign: TextAlign.center,
-            style: GoogleFonts.inter(
-              fontSize: 7,
-              fontWeight: FontWeight.w700,
-              letterSpacing: 0.8,
-              color: Colors.white,
-            ),
-          ),
-          const SizedBox(height: 5),
-          Container(
-            width: 32,
-            height: 32,
-            decoration: BoxDecoration(
-              color: iconBg,
-              shape: BoxShape.circle,
-              boxShadow: [
-                BoxShadow(color: iconBg.withOpacity(0.45), blurRadius: 8),
-              ],
-            ),
-            child: Icon(icon, color: Colors.white, size: 16),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            conf,
-            style: GoogleFonts.inter(
-              fontSize: 8,
-              fontWeight: FontWeight.w600,
-              color: Colors.white.withOpacity(0.65),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _WarningBadge extends StatelessWidget {
-  final String text;
-  const _WarningBadge({required this.text});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
-      decoration: BoxDecoration(
-        color: AppColors.tertiaryContainer,
-        borderRadius: BorderRadius.circular(999),
-        boxShadow: [
-          BoxShadow(
-            color: AppColors.tertiaryContainer.withOpacity(0.55),
-            blurRadius: 18,
-          ),
-        ],
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const Icon(Icons.warning_rounded, color: Colors.white, size: 16),
-          const SizedBox(width: 7),
-          Text(
-            text,
-            style: GoogleFonts.inter(
-              fontSize: 10,
-              fontWeight: FontWeight.w700,
-              letterSpacing: 1.1,
-              color: Colors.white,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _SpeedHUD extends StatelessWidget {
-  final double speed;
-  const _SpeedHUD({required this.speed});
-
-  @override
-  Widget build(BuildContext context) {
-    return _GlassCard(
-      child: SizedBox(
-        width: 108,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              'TỐC ĐỘ',
-              style: GoogleFonts.inter(
-                fontSize: 8,
-                fontWeight: FontWeight.w700,
-                letterSpacing: 1.5,
-                color: AppColors.onSurfaceVariant.withOpacity(0.65),
+            const Spacer(),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+              decoration: BoxDecoration(
+                color: Colors.black.withOpacity(0.5),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: Colors.white.withOpacity(0.05)),
               ),
-            ),
-            Text(
-              speed.toInt().toString(),
-              style: GoogleFonts.inter(
-                fontSize: 46,
-                fontWeight: FontWeight.w700,
-                height: 1.05,
-                color: AppColors.primary,
-              ),
-            ),
-            Text(
-              'KM/H',
-              style: GoogleFonts.inter(
-                fontSize: 10,
-                fontWeight: FontWeight.w700,
-                color: AppColors.primaryFixedDim,
-              ),
-            ),
-            const SizedBox(height: 8),
-            Divider(color: Colors.white.withOpacity(0.1), height: 1),
-            const SizedBox(height: 8),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-              children: [
-                _StatCell(
-                  label: 'Giới hạn',
-                  value: '45',
-                  color: AppColors.onSurface,
-                ),
-                _StatCell(
-                  label: 'Chênh',
-                  value: '-3',
-                  color: AppColors.secondary,
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _StatCell extends StatelessWidget {
-  final String label, value;
-  final Color color;
-  const _StatCell({
-    required this.label,
-    required this.value,
-    required this.color,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      children: [
-        Text(
-          label,
-          style: GoogleFonts.inter(
-            fontSize: 8,
-            color: AppColors.onSurfaceVariant.withOpacity(0.55),
-          ),
-        ),
-        Text(
-          value,
-          style: GoogleFonts.inter(
-            fontSize: 17,
-            fontWeight: FontWeight.w600,
-            color: color,
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _NavHUD extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) {
-    return _GlassCard(
-      child: SizedBox(
-        width: 145,
-        child: Row(
-          children: [
-            const Icon(
-              Icons.turn_right_rounded,
-              color: AppColors.primary,
-              size: 34,
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
+              child: Row(
                 children: [
-                  RichText(
-                    text: TextSpan(
-                      style: GoogleFonts.inter(
-                        fontSize: 19,
-                        fontWeight: FontWeight.w700,
-                        color: AppColors.primary,
-                      ),
-                      children: [
-                        const TextSpan(text: '1.2 '),
-                        TextSpan(
-                          text: 'km',
-                          style: GoogleFonts.inter(
-                            fontSize: 11,
-                            color: AppColors.primary,
-                          ),
-                        ),
-                      ],
+                  Container(
+                    width: 6,
+                    height: 6,
+                    decoration: const BoxDecoration(
+                      color: Color(0xFF10B981),
+                      shape: BoxShape.circle,
                     ),
                   ),
-                  const SizedBox(height: 4),
+                  const SizedBox(width: 6),
                   Text(
-                    'Đường Nguyễn Huệ',
+                    isEn ? 'GPS ACQUIRED' : 'GPS TRUY CẬP',
                     style: GoogleFonts.inter(
-                      fontSize: 10,
-                      height: 1.4,
-                      color: AppColors.onSurfaceVariant,
+                      fontSize: 8,
+                      fontWeight: FontWeight.w800,
+                      color: Colors.white,
+                      letterSpacing: 1.0,
                     ),
                   ),
                 ],
@@ -680,66 +628,6 @@ class _NavHUD extends StatelessWidget {
           ],
         ),
       ),
-    );
-  }
-}
-
-class _VoiceWave extends StatelessWidget {
-  final double t;
-  const _VoiceWave({required this.t});
-
-  @override
-  Widget build(BuildContext context) {
-    final heights = [14.0, 28.0, 42.0, 56.0, 42.0, 28.0, 14.0];
-    final opacs = [0.25, 0.45, 0.65, 1.0, 0.65, 0.45, 0.25];
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
-          decoration: BoxDecoration(
-            color: Colors.black.withOpacity(0.55),
-            borderRadius: BorderRadius.circular(999),
-          ),
-          child: Text(
-            '"Đang quét các mối nguy hiểm..."',
-            style: GoogleFonts.inter(
-              fontSize: 10,
-              fontWeight: FontWeight.w700,
-              letterSpacing: 1.2,
-              color: AppColors.primary,
-            ),
-          ),
-        ),
-        const SizedBox(height: 8),
-        Row(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.end,
-          children: List.generate(7, (i) {
-            final wave = math.sin((t * math.pi * 2) + (i * 0.75));
-            final h = (heights[i] + wave * 10).clamp(6.0, 72.0);
-            return Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 2.5),
-              child: Container(
-                width: 5,
-                height: h,
-                decoration: BoxDecoration(
-                  color: AppColors.primary.withOpacity(opacs[i]),
-                  borderRadius: BorderRadius.circular(3),
-                  boxShadow: i == 3
-                      ? [
-                          BoxShadow(
-                            color: AppColors.primary.withOpacity(0.55),
-                            blurRadius: 12,
-                          ),
-                        ]
-                      : null,
-                ),
-              ),
-            );
-          }),
-        ),
-      ],
     );
   }
 }
@@ -753,11 +641,15 @@ class _GlassCard extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: AppColors.surfaceContainer.withOpacity(0.68),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.white.withOpacity(0.10)),
+        color: const Color(0xFF0F172A).withOpacity(0.75),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: Colors.white.withOpacity(0.08)),
         boxShadow: [
-          BoxShadow(color: Colors.black.withOpacity(0.45), blurRadius: 24),
+          BoxShadow(
+            color: Colors.black.withOpacity(0.55),
+            blurRadius: 24,
+            offset: const Offset(0, 8),
+          ),
         ],
       ),
       child: child,
@@ -765,93 +657,506 @@ class _GlassCard extends StatelessWidget {
   }
 }
 
-class _AlertWarning extends StatelessWidget {
-  final String label;
-  final double confidence;
-  const _AlertWarning({required this.label, required this.confidence});
+class _SpeedHUD extends StatelessWidget {
+  final double speed;
+  final String? speedLimit;
+  const _SpeedHUD({
+    required this.speed,
+    required this.speedLimit,
+  });
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      decoration: BoxDecoration(
-        color: AppColors.tertiaryContainer.withOpacity(0.95),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: AppColors.tertiaryContainer.withOpacity(0.7),
-          width: 1.5,
+    final isEn = context.watch<SettingsProvider>().isEnglish;
+    final double? limitVal = speedLimit != null ? double.tryParse(speedLimit!) : null;
+    final String diffStr = (limitVal != null)
+        ? (speed - limitVal > 0 ? '+${(speed - limitVal).toInt()}' : '${(speed - limitVal).toInt()}')
+        : '-- --';
+
+    final Color diffColor = (limitVal != null)
+        ? (speed - limitVal > 0 ? const Color(0xFFEF4444) : const Color(0xFF10B981))
+        : Colors.white60;
+
+    return _GlassCard(
+      child: SizedBox(
+        width: 112,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              isEn ? 'SPEED' : 'TỐC ĐỘ',
+              style: GoogleFonts.inter(
+                fontSize: 8.5,
+                fontWeight: FontWeight.w800,
+                letterSpacing: 1.5,
+                color: Colors.white54,
+              ),
+            ),
+            const SizedBox(height: 2),
+            Text(
+              speed.toInt().toString(),
+              style: GoogleFonts.inter(
+                fontSize: 48,
+                fontWeight: FontWeight.w900,
+                height: 1.0,
+                color: Colors.white,
+              ),
+            ),
+            Text(
+              'KM/H',
+              style: GoogleFonts.inter(
+                fontSize: 9,
+                fontWeight: FontWeight.w800,
+                color: AppColors.primary,
+                letterSpacing: 0.8,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Divider(color: Colors.white.withOpacity(0.08), height: 1),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    children: [
+                      Text(
+                        isEn ? 'Limit' : 'Giới hạn',
+                        style: GoogleFonts.inter(
+                          fontSize: 8,
+                          color: Colors.white38,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        speedLimit ?? '-- --',
+                        style: GoogleFonts.inter(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w800,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Container(
+                  width: 1,
+                  height: 20,
+                  color: Colors.white.withOpacity(0.08),
+                ),
+                Expanded(
+                  child: Column(
+                    children: [
+                      Text(
+                        isEn ? 'Diff' : 'Chênh',
+                        style: GoogleFonts.inter(
+                          fontSize: 8,
+                          color: Colors.white38,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        diffStr,
+                        style: GoogleFonts.inter(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w800,
+                          color: diffColor,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ],
         ),
-        boxShadow: [
-          BoxShadow(
-            color: AppColors.tertiaryContainer.withOpacity(0.6),
-            blurRadius: 20,
-            spreadRadius: 2,
+      ),
+    );
+  }
+}
+
+class _QuickControlsHUD extends StatelessWidget {
+  final bool isScanContinuous;
+  final ValueChanged<bool> onScanChanged;
+  final bool voiceEnabled;
+  final ValueChanged<bool> onVoiceChanged;
+  const _QuickControlsHUD({
+    required this.isScanContinuous,
+    required this.onScanChanged,
+    required this.voiceEnabled,
+    required this.onVoiceChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final isEn = context.watch<SettingsProvider>().isEnglish;
+    return _GlassCard(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _buildIconToggle(
+            icon: Icons.document_scanner_outlined,
+            label: isEn ? 'AR SCAN' : 'QUÉT AR',
+            value: isScanContinuous,
+            onChanged: onScanChanged,
+          ),
+          const SizedBox(height: 16),
+          _buildIconToggle(
+            icon: Icons.volume_up_outlined,
+            label: isEn ? 'READ SIGN' : 'ĐỌC BIỂN',
+            value: voiceEnabled,
+            onChanged: onVoiceChanged,
           ),
         ],
       ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(
-                Icons.warning_amber_rounded,
-                color: Colors.white,
-                size: 20,
-              ),
-              const SizedBox(width: 8),
-              Text(
-                'CẢM SỬ DỤNG',
-                style: GoogleFonts.inter(
-                  fontSize: 9,
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: 1.2,
-                  color: Colors.white.withOpacity(0.85),
-                ),
-              ),
-            ],
+    );
+  }
+
+  Widget _buildIconToggle({
+    required IconData icon,
+    required String label,
+    required bool value,
+    required ValueChanged<bool> onChanged,
+  }) {
+    return GestureDetector(
+      onTap: () => onChanged(!value),
+      behavior: HitTestBehavior.opaque,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        width: 56,
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        decoration: BoxDecoration(
+          color: value ? AppColors.primary.withOpacity(0.15) : Colors.transparent,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: value ? AppColors.primary.withOpacity(0.4) : Colors.transparent,
+            width: 1,
           ),
-          const SizedBox(height: 8),
-          Text(
-            label,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              icon,
+              color: value ? AppColors.primary : Colors.white54,
+              size: 24,
+            ),
+            const SizedBox(height: 4),
+            Text(
+              label,
+              style: GoogleFonts.inter(
+                fontSize: 8,
+                fontWeight: FontWeight.w800,
+                color: value ? AppColors.primary : Colors.white54,
+              ),
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _VoiceWave extends StatelessWidget {
+  final double t;
+  final bool isScanning;
+  const _VoiceWave({required this.t, this.isScanning = true});
+
+  @override
+  Widget build(BuildContext context) {
+    final isEn = context.watch<SettingsProvider>().isEnglish;
+    final heights = [12.0, 24.0, 36.0, 48.0, 36.0, 24.0, 12.0];
+    final opacs = [0.25, 0.45, 0.65, 1.0, 0.65, 0.45, 0.25];
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+          decoration: BoxDecoration(
+            color: Colors.black.withOpacity(0.65),
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(color: Colors.white.withOpacity(0.06)),
+          ),
+          child: Text(
+            isScanning 
+              ? (isEn ? '"Scanning for hazards..."' : '"Đang quét các mối nguy hiểm..."')
+              : (isEn ? '"Scanning paused"' : '"Đã tạm dừng quét"'),
             style: GoogleFonts.inter(
-              fontSize: 14,
+              fontSize: 9.5,
               fontWeight: FontWeight.w700,
-              color: Colors.white,
-              letterSpacing: 0.5,
+              letterSpacing: 0.8,
+              color: isScanning ? AppColors.primary : Colors.white54,
             ),
           ),
-          const SizedBox(height: 6),
-          Container(
-            height: 4,
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(2),
-              color: Colors.white.withOpacity(0.2),
-            ),
-            child: Align(
-              alignment: Alignment.centerLeft,
+        ),
+        const SizedBox(height: 8),
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: List.generate(7, (i) {
+            final wave = math.sin((t * math.pi * 2) + (i * 0.75));
+            final h = (heights[i] + wave * 8).clamp(6.0, 60.0);
+            return Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 2.0),
               child: Container(
-                width: 90 * confidence,
+                width: 4.5,
+                height: isScanning ? h : 6.0,
                 decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(2),
-                  color: Colors.white,
+                  color: (isScanning ? AppColors.primary : Colors.white54).withOpacity(opacs[i]),
+                  borderRadius: BorderRadius.circular(3),
+                  boxShadow: i == 3 && isScanning
+                      ? [
+                          BoxShadow(
+                            color: AppColors.primary.withOpacity(0.55),
+                            blurRadius: 10,
+                          ),
+                        ]
+                      : null,
                 ),
               ),
+            );
+          }),
+        ),
+      ],
+    );
+  }
+}
+
+class _DetectionBox extends StatelessWidget {
+  final String label, conf;
+  final Color borderColor, glowColor;
+  final double alpha;
+  final bool isEn;
+  final double width;
+  final double height;
+
+  const _DetectionBox({
+    required this.label,
+    required this.conf,
+    required this.borderColor,
+    required this.glowColor,
+    required this.alpha,
+    this.isEn = false,
+    required this.width,
+    required this.height,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: width,
+      height: height,
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          // Bounding box viền
+          Container(
+            decoration: BoxDecoration(
+              border: Border.all(color: borderColor.withOpacity(alpha), width: 3),
+              color: borderColor.withOpacity(0.15),
+              boxShadow: [
+                BoxShadow(
+                  color: glowColor.withOpacity(alpha * 0.4),
+                  blurRadius: 8,
+                ),
+              ],
+              borderRadius: BorderRadius.circular(8),
             ),
           ),
-          const SizedBox(height: 6),
-          Text(
-            '${(confidence * 100).toInt()}% confidence',
-            style: GoogleFonts.inter(
-              fontSize: 10,
-              fontWeight: FontWeight.w600,
-              color: Colors.white.withOpacity(0.75),
+          // Nhãn dán phía trên hộp
+          Positioned(
+            top: -30,
+            left: 0,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: borderColor.withOpacity(0.9),
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.warning_amber_rounded, color: Colors.black, size: 14),
+                  const SizedBox(width: 4),
+                  Text(
+                    label,
+                    style: GoogleFonts.inter(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w900,
+                      color: Colors.black,
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    conf,
+                    style: GoogleFonts.inter(
+                      fontSize: 9,
+                      fontWeight: FontWeight.w700,
+                      color: Colors.black87,
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
         ],
       ),
     );
+  }
+}
+
+class _AlertWarning extends StatelessWidget {
+  final String label;
+  final double confidence;
+  const _AlertWarning({
+    required this.label,
+    required this.confidence,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final isEn = context.watch<SettingsProvider>().isEnglish;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: const Color(0xFF7F1D1D).withOpacity(0.92), // Rich warning red
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: const Color(0xFFEF4444).withOpacity(0.5),
+          width: 1.5,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFFEF4444).withOpacity(0.25),
+            blurRadius: 20,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          TrafficSignIcon(
+            label: label,
+            size: 40,
+            isEn: isEn,
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Row(
+                  children: [
+                    const Icon(
+                      Icons.warning_amber_rounded,
+                      color: Colors.yellow,
+                      size: 14,
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      isEn ? 'WARNING AHEAD' : 'CẢNH BÁO PHÍA TRƯỚC',
+                      style: GoogleFonts.inter(
+                        fontSize: 9,
+                        fontWeight: FontWeight.w900,
+                        color: Colors.yellow,
+                        letterSpacing: 1.2,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  SignTranslator.translate(label, isEn),
+                  style: GoogleFonts.inter(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w900,
+                    color: Colors.white,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          ConfidenceBadge(confidence: confidence),
+        ],
+      ),
+    );
+  }
+}
+
+class _ScanningOverlayPainter extends CustomPainter {
+  final double pulseValue;
+  final bool isScanning;
+  _ScanningOverlayPainter({required this.pulseValue, this.isScanning = true});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final baseColor = isScanning ? AppColors.primary : Colors.white54;
+    final crossPaint = Paint()
+      ..color = baseColor.withOpacity(isScanning ? (0.35 * pulseValue) : 0.2)
+      ..strokeWidth = 1.5;
+
+    final double w = size.width;
+    final double h = size.height;
+
+    // Draw scanning zone corner bracket borders
+    final double pad = 40.0;
+    final double bracketLen = 24.0;
+    final cornerPaint = Paint()
+      ..color = baseColor.withOpacity(isScanning ? (0.6 * pulseValue) : 0.3)
+      ..strokeWidth = 2.5
+      ..style = PaintingStyle.stroke;
+
+    // Top-Left corner
+    canvas.drawPath(
+      Path()
+        ..moveTo(pad, pad + bracketLen)
+        ..lineTo(pad, pad)
+        ..lineTo(pad + bracketLen, pad),
+      cornerPaint,
+    );
+
+    // Top-Right corner
+    canvas.drawPath(
+      Path()
+        ..moveTo(w - pad, pad + bracketLen)
+        ..lineTo(w - pad, pad)
+        ..lineTo(w - pad - bracketLen, pad),
+      cornerPaint,
+    );
+
+    // Bottom-Left corner
+    canvas.drawPath(
+      Path()
+        ..moveTo(pad, h - pad - bracketLen)
+        ..lineTo(pad, h - pad)
+        ..lineTo(pad + bracketLen, h - pad),
+      cornerPaint,
+    );
+
+    // Bottom-Right corner
+    canvas.drawPath(
+      Path()
+        ..moveTo(w - pad, h - pad - bracketLen)
+        ..lineTo(w - pad, h - pad)
+        ..lineTo(w - pad - bracketLen, h - pad),
+      cornerPaint,
+    );
+
+    // Center Crosshair
+    final double cx = w / 2;
+    final double cy = h / 2;
+    canvas.drawLine(Offset(cx - 15, cy), Offset(cx - 5, cy), crossPaint);
+    canvas.drawLine(Offset(cx + 5, cy), Offset(cx + 15, cy), crossPaint);
+    canvas.drawLine(Offset(cx, cy - 15), Offset(cx, cy - 5), crossPaint);
+    canvas.drawLine(Offset(cx, cy + 5), Offset(cx, cy + 15), crossPaint);
+    canvas.drawCircle(Offset(cx, cy), 2, Paint()..color = baseColor.withOpacity(isScanning ? 1.0 : 0.5));
+  }
+
+  @override
+  bool shouldRepaint(covariant _ScanningOverlayPainter oldDelegate) {
+    return oldDelegate.pulseValue != pulseValue || oldDelegate.isScanning != isScanning;
   }
 }
