@@ -30,47 +30,19 @@ class DetectionResult {
   double get width  => right - left;
   double get height => bottom - top;
 
-  /// Nhãn đẹp để hiển thị lên UI
+  /// Nhãn đẹp để hiển thị lên UI (capitalize nhãn tiếng Việt từ model)
   String get displayLabel {
-    switch (label) {
-      case 'STOP':
-        return 'BIỂN DỪNG';
-      case 'NO_ENTRY':
-        return 'CẤM VÀO';
-      case 'SPEED_LIMIT_30':
-        return 'GIỚI HẠN: 30 KM/H';
-      case 'SPEED_LIMIT_45':
-        return 'GIỚI HẠN: 45 KM/H';
-      case 'SPEED_LIMIT_60':
-        return 'GIỚI HẠN: 60 KM/H';
-      case 'SPEED_LIMIT_80':
-        return 'GIỚI HẠN: 80 KM/H';
-      case 'SPEED_LIMIT_100':
-        return 'GIỚI HẠN: 100 KM/H';
-      case 'NO_PARKING':
-        return 'CẤM ĐỖ XE';
-      case 'ONE_WAY':
-        return 'ĐƯỜNG MỘT CHIỀU';
-      case 'GIVE_WAY':
-        return 'NHƯỜNG ĐƯỜNG';
-      case 'PEDESTRIAN_CROSSING':
-        return 'NGƯỜI ĐI BỘ';
-      case 'SCHOOL_ZONE':
-        return 'KHU VỰC TRƯỜNG HỌC';
-      default:
-        return label.replaceAll('_', ' ');
-    }
+    if (label.isEmpty) return '';
+    return label[0].toUpperCase() + label.substring(1);
   }
 
   /// Phần trăm để hiển thị (ví dụ: "97%")
   String get confidenceText => '${(confidence * 100).toInt()}%';
 
-  /// Chỉ lấy tốc độ giới hạn nếu là biển tốc độ
+  /// Chỉ lấy tốc độ giới hạn nếu là biển tốc độ (label tiếng Việt từ model)
   int? get speedLimit {
-    if (label.startsWith('SPEED_LIMIT_')) {
-      return int.tryParse(label.replaceFirst('SPEED_LIMIT_', ''));
-    }
-    return null;
+    final match = RegExp(r'tốc độ tối đa (\d+)').firstMatch(label);
+    return match != null ? int.tryParse(match.group(1)!) : null;
   }
 
   @override

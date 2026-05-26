@@ -3,7 +3,6 @@ import 'dart:io';
 import 'package:flutter/services.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 
-import '../services/traffic_rule_engine.dart';
 
 class VoiceGuidanceService {
   static final VoiceGuidanceService _instance =
@@ -185,16 +184,15 @@ class VoiceGuidanceService {
       String message = isEn ? 'Warning: $signLabel' : 'Chú ý biển báo: $signLabel';
       
       final lower = signLabel.toLowerCase();
-      final currentLimit = TrafficRuleEngine.instance.currentState.activeSpeedLimit;
       
       if (lower.contains('khu vực đông dân cư') && !lower.contains('ngoài')) {
         message = isEn 
-            ? 'Entering populated area. Maximum speed ${currentLimit ?? 60} km/h.'
-            : 'Bắt đầu khu đông dân cư. Tốc độ tối đa ${currentLimit ?? 60} kilômét trên giờ.';
+            ? 'Entering populated area. Maximum speed 60 km/h.'
+            : 'Bắt đầu khu đông dân cư. Tốc độ tối đa 60 kilômét trên giờ.';
       } else if (lower.contains('ngoài khu vực đông dân cư')) {
         message = isEn
-            ? 'Leaving populated area. Maximum speed ${currentLimit ?? 90} km/h.'
-            : 'Hết khu đông dân cư. Tốc độ tối đa ${currentLimit ?? 90} kilômét trên giờ.';
+            ? 'Leaving populated area. Maximum speed 90 km/h.'
+            : 'Hết khu đông dân cư. Tốc độ tối đa 90 kilômét trên giờ.';
       } else if (lower.contains('tốc độ tối đa') && !lower.contains('hết')) {
         final match = RegExp(r'\d+').firstMatch(lower);
         if (match != null) {
@@ -204,8 +202,8 @@ class VoiceGuidanceService {
         }
       } else if (lower.contains('hết tốc độ tối đa')) {
         message = isEn
-            ? 'End of speed limit. Current maximum speed is ${currentLimit ?? 60} km/h.'
-            : 'Hết giới hạn tốc độ. Tốc độ tối đa hiện tại là ${currentLimit ?? 60} kilômét trên giờ.';
+            ? 'End of speed limit.'
+            : 'Hết giới hạn tốc độ.';
       }
 
       print('🎤 [TTS] Speaking: $message');

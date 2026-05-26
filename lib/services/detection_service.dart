@@ -2,10 +2,14 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:isolate';
 import 'dart:math' as math;
+import 'dart:typed_data';
 
 import 'package:flutter/services.dart';
 import 'package:tflite_flutter/tflite_flutter.dart';
 import 'package:image/image.dart' as img;
+import 'package:sqflite/sqflite.dart' show getDatabasesPath;
+import 'package:path/path.dart' show join;
+import 'package:camera/camera.dart' show CameraImage, ImageFormatGroup;
 
 import '../models/detection_result.dart';
 
@@ -15,32 +19,63 @@ import '../models/detection_result.dart';
 
 class _WorkerBootstrap {
   final SendPort replyTo;
-  final int interpreterAddress;
+  final String modelPath;
   final List<String> labels;
-  final int numDetections;
-  final int numClasses;
-  final bool isYoloV8; // true → output [1, cols, detections]; false → [1, detections, cols]
-  final bool isFloat;  // true → float32 input [0,1]; false → uint8 [0,255]
 
   const _WorkerBootstrap({
     required this.replyTo,
-    required this.interpreterAddress,
+    required this.modelPath,
     required this.labels,
+  });
+}
+
+class _WorkerInitResult {
+  final SendPort sendPort;
+  final bool isYoloV8;
+  final int numDetections;
+  final int numClasses;
+  final bool isFloat;
+  final bool isNCHW;
+
+  const _WorkerInitResult({
+    required this.sendPort,
+    required this.isYoloV8,
     required this.numDetections,
     required this.numClasses,
-    required this.isYoloV8,
     required this.isFloat,
+    required this.isNCHW,
   });
 }
 
 class _InferenceRequest {
   final int id;
-  final Uint8List imageBytes;
   final SendPort replyTo;
+
+  // JPEG bytes (snapshot mode)
+  final Uint8List? jpegBytes;
+
+  // YUV420 plane bytes (stream mode)
+  final Uint8List? yBytes;
+  final Uint8List? uBytes;
+  final Uint8List? vBytes;
+  final int? width;
+  final int? height;
+  final int? yRowStride;
+  final int? uvRowStride;
+  final int? uvPixelStride;
+
   const _InferenceRequest({
     required this.id,
-    required this.imageBytes,
     required this.replyTo,
+    this.jpegBytes,
+    this.yBytes,
+    this.uBytes,
+    this.vBytes,
+    this.width,
+    this.height,
+    this.yRowStride,
+    this.uvRowStride,
+    this.uvPixelStride,
   });
 }
 
@@ -59,7 +94,6 @@ class DetectionService {
   static final DetectionService instance = DetectionService._();
   DetectionService._();
 
-  Interpreter? _interpreter; // lives on main isolate
   List<String> _labels = [];
   bool _isInitialized = false;
 
@@ -86,89 +120,27 @@ class DetectionService {
           .toList();
       print('[DetectionService] Labels: ${_labels.length}');
 
-      // 2. Load interpreter on MAIN isolate — it will share its address with worker
-      final options = InterpreterOptions()..threads = 4;
-      if (Platform.isAndroid) {
-        try {
-          options.addDelegate(XNNPackDelegate());
-        } catch (_) {
-          // fallback
-        }
-      } else if (Platform.isIOS) {
-        try {
-          options.addDelegate(GpuDelegate());
-        } catch (_) {}
+      // Copy model to local databases directory to use memory-mapping (mmap)
+      final dbPath = await getDatabasesPath();
+      final modelPath = join(dbPath, 'best.tflite');
+      final modelFile = File(modelPath);
+
+      if (!await modelFile.exists()) {
+        print('[DetectionService] Copying model from assets to $modelPath to enable memory-mapping...');
+        final byteData = await rootBundle.load('assets/models/best.tflite');
+        final bytes = byteData.buffer.asUint8List(byteData.offsetInBytes, byteData.lengthInBytes);
+        await modelFile.writeAsBytes(bytes, flush: true);
+        print('[DetectionService] Model copied successfully.');
       }
 
-      _interpreter = await Interpreter.fromAsset(
-        'assets/models/best.tflite',
-        options: options,
-      );
-
-      // 3. Read exact shapes & dtypes from model
-      final inputTensor  = _interpreter!.getInputTensor(0);
-      final outputTensor = _interpreter!.getOutputTensor(0);
-
-      final inputShape  = inputTensor.shape;
-      final outputShape = outputTensor.shape;
-      final inputDtype  = inputTensor.type.toString();
-
-      print('[DetectionService] Input  shape=$inputShape dtype=$inputDtype');
-      print('[DetectionService] Output shape=$outputShape');
-
-      // ── Detect model format ──────────────────────────────────────────────
-      // YOLOv5: [1, numDetections, 5+numClasses]  e.g. [1, 25200, 85]
-      // YOLOv8: [1, 4+numClasses, numDetections]  e.g. [1,    63, 8400]
-      //         (transposed, no objectness score)
-      int  numDetections = 8400;
-      int  numClasses    = _labels.length;
-      bool isYoloV8      = false;
-
-      if (outputShape.length == 3) {
-        final d1 = outputShape[1];
-        final d2 = outputShape[2];
-        // YOLOv8: d1 = 4+classes (small), d2 = detections (large)
-        // YOLOv5: d1 = detections (large), d2 = 5+classes (small)
-        if (d1 < d2) {
-          // YOLOv8 format: [1, 4+classes, detections]
-          isYoloV8      = true;
-          numClasses    = d1 - 4; // no objectness in YOLOv8
-          numDetections = d2;
-          print('[DetectionService] Format=YOLOv8  classes=$numClasses  detections=$numDetections');
-        } else {
-          // YOLOv5 format: [1, detections, 5+classes]
-          isYoloV8      = false;
-          numDetections = d1;
-          numClasses    = d2 - 5;
-          print('[DetectionService] Format=YOLOv5  classes=$numClasses  detections=$numDetections');
-        }
-      } else if (outputShape.length == 2) {
-        isYoloV8      = false;
-        numDetections = outputShape[0];
-        numClasses    = outputShape[1] - 5;
-        print('[DetectionService] Format=YOLOv5-2D  classes=$numClasses  detections=$numDetections');
-      }
-
-      // Clamp numClasses to label count
-      if (numClasses != _labels.length) {
-        print('[DetectionService] ⚠️ numClasses($numClasses) adjusted to labels.length=${_labels.length}');
-        numClasses = _labels.length;
-      }
-
-      final bool isFloat = inputDtype.toLowerCase().contains('float');
-
-      // 4. Spawn persistent worker
+      // 2. Spawn persistent worker
       final readyPort = ReceivePort();
       _workerIsolate = await Isolate.spawn(
         _workerMain,
         _WorkerBootstrap(
-          replyTo:            readyPort.sendPort,
-          interpreterAddress: _interpreter!.address,
-          labels:             List.unmodifiable(_labels),
-          numDetections:      numDetections,
-          numClasses:         numClasses,
-          isYoloV8:           isYoloV8,
-          isFloat:            isFloat,
+          replyTo:   readyPort.sendPort,
+          modelPath: modelFile.path,
+          labels:    List.unmodifiable(_labels),
         ),
         debugName: 'DetectionWorker',
       );
@@ -176,13 +148,17 @@ class DetectionService {
       final msg = await readyPort.first;
       readyPort.close();
 
-      if (msg is! SendPort) {
+      if (msg is String) {
+        throw StateError('Worker failed to initialize: $msg');
+      }
+
+      if (msg is! _WorkerInitResult) {
         throw StateError('Worker failed to start: $msg');
       }
-      _workerSendPort = msg;
 
+      _workerSendPort = msg.sendPort;
       _isInitialized = true;
-      print('[DetectionService] ✅ Ready  isYoloV8=$isYoloV8  detections=$numDetections  classes=$numClasses');
+      print('[DetectionService] ✅ Ready  isYoloV8=${msg.isYoloV8}  detections=${msg.numDetections}  classes=${msg.numClasses}');
     } catch (e) {
       _isInitialized = false;
       print('[DetectionService] ❌ initialize() failed: $e');
@@ -190,18 +166,50 @@ class DetectionService {
     }
   }
 
-  Future<List<DetectionResult>> detect(Uint8List imageBytes) async {
+  Future<List<DetectionResult>> detect({
+    Uint8List? jpegBytes,
+    CameraImage? cameraImage,
+  }) async {
     if (!_isInitialized || _workerSendPort == null) return [];
 
     try {
       final replyPort = ReceivePort();
       final id = ++_requestId;
 
-      _workerSendPort!.send(_InferenceRequest(
-        id:         id,
-        imageBytes: imageBytes,
-        replyTo:    replyPort.sendPort,
-      ));
+      if (cameraImage != null) {
+        final planes = cameraImage.planes;
+        if (planes.length == 1 || cameraImage.format.group == ImageFormatGroup.jpeg) {
+          _workerSendPort!.send(_InferenceRequest(
+            id:        id,
+            replyTo:   replyPort.sendPort,
+            jpegBytes: planes[0].bytes,
+          ));
+        } else if (planes.length >= 3) {
+          _workerSendPort!.send(_InferenceRequest(
+            id:             id,
+            replyTo:        replyPort.sendPort,
+            yBytes:         planes[0].bytes,
+            uBytes:         planes[1].bytes,
+            vBytes:         planes[2].bytes,
+            width:          cameraImage.width,
+            height:         cameraImage.height,
+            yRowStride:     planes[0].bytesPerRow,
+            uvRowStride:    planes[1].bytesPerRow,
+            uvPixelStride:  planes[1].bytesPerPixel ?? 1,
+          ));
+        } else {
+          print('[DetectionService] ❌ Unsupported camera image format: planes=${planes.length}, group=${cameraImage.format.group}');
+          return [];
+        }
+      } else if (jpegBytes != null) {
+        _workerSendPort!.send(_InferenceRequest(
+          id:        id,
+          replyTo:   replyPort.sendPort,
+          jpegBytes: jpegBytes,
+        ));
+      } else {
+        return [];
+      }
 
       final reply = await replyPort.first as _InferenceReply;
       replyPort.close();
@@ -218,41 +226,103 @@ class DetectionService {
   }
 
   // ──────────────────────────────────────────────────────────────────────────
-  // Worker isolate — uses Interpreter.fromAddress() (official tflite API)
+  // Worker isolate — loads and owns Interpreter instance
   // ──────────────────────────────────────────────────────────────────────────
   static void _workerMain(_WorkerBootstrap bootstrap) async {
-    final interpreter = Interpreter.fromAddress(
-      bootstrap.interpreterAddress,
-      allocated: true,
-    );
+    Interpreter? interpreter;
+    try {
+      // 1. Load interpreter inside the background isolate
+      final options = InterpreterOptions()..threads = 2;
+      interpreter = Interpreter.fromFile(
+        File(bootstrap.modelPath),
+        options: options,
+      );
 
-    final receivePort = ReceivePort();
-    bootstrap.replyTo.send(receivePort.sendPort);
+      // 2. Read exact shapes & dtypes from model to detect format
+      final inputTensor  = interpreter.getInputTensor(0);
+      final outputTensor = interpreter.getOutputTensor(0);
 
-    await for (final msg in receivePort) {
-      if (msg is _InferenceRequest) {
-        try {
-          final results = _runInference(
-            imageBytes:    msg.imageBytes,
-            interpreter:   interpreter,
-            labels:        bootstrap.labels,
-            numDetections: bootstrap.numDetections,
-            numClasses:    bootstrap.numClasses,
-            isYoloV8:      bootstrap.isYoloV8,
-            isFloat:       bootstrap.isFloat,
-          );
-          msg.replyTo.send(_InferenceReply(id: msg.id, results: results));
-        } catch (e, st) {
-          msg.replyTo.send(_InferenceReply(
-            id:      msg.id,
-            results: [],
-            error:   '$e\n$st',
-          ));
+      final inputShape  = inputTensor.shape;
+      final outputShape = outputTensor.shape;
+      final inputDtype  = inputTensor.type.toString();
+
+      int numDetections = 8400;
+      int numClasses    = bootstrap.labels.length;
+      bool isYoloV8      = false;
+
+      if (outputShape.length == 3) {
+        final d1 = outputShape[1];
+        final d2 = outputShape[2];
+        if (d1 < d2) {
+          isYoloV8      = true;
+          numClasses    = d1 - 4;
+          numDetections = d2;
+        } else {
+          isYoloV8      = false;
+          numDetections = d1;
+          numClasses    = d2 - 5;
         }
-      } else if (msg == 'dispose') {
-        receivePort.close();
-        break;
+      } else if (outputShape.length == 2) {
+        isYoloV8      = false;
+        numDetections = outputShape[0];
+        numClasses    = outputShape[1] - 5;
       }
+
+      if (numClasses != bootstrap.labels.length) {
+        numClasses = bootstrap.labels.length;
+      }
+
+      final bool isFloat = inputDtype.toLowerCase().contains('float');
+      final bool isNCHW = (inputShape.length == 4 && inputShape[1] == 3);
+
+      final receivePort = ReceivePort();
+      bootstrap.replyTo.send(_WorkerInitResult(
+        sendPort:      receivePort.sendPort,
+        isYoloV8:      isYoloV8,
+        numDetections: numDetections,
+        numClasses:    numClasses,
+        isFloat:       isFloat,
+        isNCHW:        isNCHW,
+      ));
+
+      await for (final msg in receivePort) {
+        if (msg is _InferenceRequest) {
+          try {
+            final results = _runInference(
+              interpreter:   interpreter,
+              labels:        bootstrap.labels,
+              numDetections: numDetections,
+              numClasses:    numClasses,
+              isYoloV8:      isYoloV8,
+              isFloat:       isFloat,
+              isNCHW:        isNCHW,
+              jpegBytes:     msg.jpegBytes,
+              yBytes:        msg.yBytes,
+              uBytes:        msg.uBytes,
+              vBytes:        msg.vBytes,
+              width:         msg.width,
+              height:        msg.height,
+              yRowStride:    msg.yRowStride,
+              uvRowStride:   msg.uvRowStride,
+              uvPixelStride: msg.uvPixelStride,
+            );
+            msg.replyTo.send(_InferenceReply(id: msg.id, results: results));
+          } catch (e, st) {
+            msg.replyTo.send(_InferenceReply(
+              id:      msg.id,
+              results: [],
+              error:   '$e\n$st',
+            ));
+          }
+        } else if (msg == 'dispose') {
+          interpreter.close();
+          receivePort.close();
+          break;
+        }
+      }
+    } catch (e, st) {
+      bootstrap.replyTo.send('Initialization failed: $e\n$st');
+      interpreter?.close();
     }
   }
 
@@ -260,76 +330,187 @@ class DetectionService {
   // Inference — runs in worker isolate
   // ──────────────────────────────────────────────────────────────────────────
   static List<DetectionResult> _runInference({
-    required Uint8List imageBytes,
     required Interpreter interpreter,
     required List<String> labels,
     required int numDetections,
     required int numClasses,
     required bool isYoloV8,
     required bool isFloat,
+    required bool isNCHW,
+    Uint8List? jpegBytes,
+    Uint8List? yBytes,
+    Uint8List? uBytes,
+    Uint8List? vBytes,
+    int? width,
+    int? height,
+    int? yRowStride,
+    int? uvRowStride,
+    int? uvPixelStride,
   }) {
-    final image = img.decodeImage(imageBytes);
-    if (image == null) return [];
+    // 1. Prepare flat input buffer
+    final int inputLength = inputSize * inputSize * 3;
+    final Float32List? floatBuffer = isFloat ? Float32List(inputLength) : null;
+    final Uint8List? uint8Buffer = !isFloat ? Uint8List(inputLength) : null;
 
-    final resized = img.copyResize(image, width: inputSize, height: inputSize);
+    final int channelSize = inputSize * inputSize;
+    img.Image? image;
 
-    // ── Input tensor: shape [1, 640, 640, 3] ────────────────────────────────
-    final inputList = List.generate(
-      1,
-      (_) => List.generate(
-        inputSize,
-        (y) => List.generate(
-          inputSize,
-          (x) {
-            final pixel = resized.getPixelSafe(x, y);
-            if (isFloat) {
-              return [pixel.r / 255.0, pixel.g / 255.0, pixel.b / 255.0];
+    if (jpegBytes != null) {
+      final rawImage = img.decodeImage(jpegBytes);
+      if (rawImage == null) return [];
+      image = img.bakeOrientation(rawImage);
+
+      // Scale & pad from img.Image to flat tensor buffer
+      final int origW = image.width;
+      final int origH = image.height;
+      final double scale = math.min(inputSize / origW, inputSize / origH);
+      final int newW = (origW * scale).round();
+      final int newH = (origH * scale).round();
+      final int padX = (inputSize - newW) ~/ 2;
+      final int padY = (inputSize - newH) ~/ 2;
+
+      for (int ty = 0; ty < inputSize; ty++) {
+        for (int tx = 0; tx < inputSize; tx++) {
+          double r = 114.0;
+          double g = 114.0;
+          double b = 114.0;
+
+          if (tx >= padX && tx < padX + newW && ty >= padY && ty < padY + newH) {
+            final int sx = ((tx - padX) / scale).floor().clamp(0, origW - 1);
+            final int sy = ((ty - padY) / scale).floor().clamp(0, origH - 1);
+            final pixel = image.getPixelSafe(sx, sy);
+            r = pixel.r.toDouble();
+            g = pixel.g.toDouble();
+            b = pixel.b.toDouble();
+          }
+
+          if (isFloat) {
+            if (isNCHW) {
+              final int offset = ty * inputSize + tx;
+              floatBuffer![offset] = r / 255.0;
+              floatBuffer[offset + channelSize] = g / 255.0;
+              floatBuffer[offset + 2 * channelSize] = b / 255.0;
             } else {
-              return [pixel.r.toInt(), pixel.g.toInt(), pixel.b.toInt()];
+              final int offset = (ty * inputSize + tx) * 3;
+              floatBuffer![offset] = r / 255.0;
+              floatBuffer[offset + 1] = g / 255.0;
+              floatBuffer[offset + 2] = b / 255.0;
             }
-          },
-        ),
-      ),
-    );
+          } else {
+            if (isNCHW) {
+              final int offset = ty * inputSize + tx;
+              uint8Buffer![offset] = r.round().clamp(0, 255);
+              uint8Buffer[offset + channelSize] = g.round().clamp(0, 255);
+              uint8Buffer[offset + 2 * channelSize] = b.round().clamp(0, 255);
+            } else {
+              final int offset = (ty * inputSize + tx) * 3;
+              uint8Buffer![offset] = r.round().clamp(0, 255);
+              uint8Buffer[offset + 1] = g.round().clamp(0, 255);
+              uint8Buffer[offset + 2] = b.round().clamp(0, 255);
+            }
+          }
+        }
+      }
+    } else if (yBytes != null &&
+        uBytes != null &&
+        vBytes != null &&
+        width != null &&
+        height != null &&
+        yRowStride != null &&
+        uvRowStride != null &&
+        uvPixelStride != null) {
+      
+      // Scale, rotate & convert from YUV directly to flat tensor buffer
+      final int origW = height!; // rotated width
+      final int origH = width!;  // rotated height
+      final double scale = math.min(inputSize / origW, inputSize / origH);
+      final int newW = (origW * scale).round();
+      final int newH = (origH * scale).round();
+      final int padX = (inputSize - newW) ~/ 2;
+      final int padY = (inputSize - newH) ~/ 2;
 
-    // ── Output tensor — must EXACTLY match model output shape ───────────────
-    // YOLOv8: [1, 4+numClasses, numDetections]  e.g. [1, 63, 8400]
-    // YOLOv5: [1, numDetections, 5+numClasses]  e.g. [1, 25200, 85]
-    final List outputList;
-    if (isYoloV8) {
-      final int cols = 4 + numClasses;
-      outputList = List.generate(
-        1,
-        (_) => List.generate(
-          cols,
-          (_) => List<double>.filled(numDetections, 0.0),
-        ),
-      );
+      for (int ty = 0; ty < inputSize; ty++) {
+        for (int tx = 0; tx < inputSize; tx++) {
+          int r = 114;
+          int g = 114;
+          int b = 114;
+
+          if (tx >= padX && tx < padX + newW && ty >= padY && ty < padY + newH) {
+            final int rx = ((tx - padX) / scale).floor().clamp(0, origW - 1);
+            final int ry = ((ty - padY) / scale).floor().clamp(0, origH - 1);
+            
+            // Back to YUV coordinates (90 degrees clockwise rotation inverse mapping)
+            final int sx = ry;
+            final int sy = height! - 1 - rx;
+
+            final int yIndex = sy * yRowStride! + sx;
+            final int uvX = sx ~/ 2;
+            final int uvY = sy ~/ 2;
+            final int uvIndex = uvY * uvRowStride! + uvX * uvPixelStride!;
+
+            if (yIndex < yBytes.length && uvIndex < uBytes.length && uvIndex < vBytes.length) {
+              final int yp = yBytes[yIndex];
+              final int up = uBytes[uvIndex];
+              final int vp = vBytes[uvIndex];
+
+              r = (yp + (vp - 128) * 1436 ~/ 1024).clamp(0, 255);
+              g = (yp - (up - 128) * 354 ~/ 1024 - (vp - 128) * 714 ~/ 1024).clamp(0, 255);
+              b = (yp + (up - 128) * 1814 ~/ 1024).clamp(0, 255);
+            }
+          }
+
+          if (isFloat) {
+            if (isNCHW) {
+              final int offset = ty * inputSize + tx;
+              floatBuffer![offset] = r / 255.0;
+              floatBuffer[offset + channelSize] = g / 255.0;
+              floatBuffer[offset + 2 * channelSize] = b / 255.0;
+            } else {
+              final int offset = (ty * inputSize + tx) * 3;
+              floatBuffer![offset] = r / 255.0;
+              floatBuffer[offset + 1] = g / 255.0;
+              floatBuffer[offset + 2] = b / 255.0;
+            }
+          } else {
+            if (isNCHW) {
+              final int offset = ty * inputSize + tx;
+              uint8Buffer![offset] = r;
+              uint8Buffer[offset + channelSize] = g;
+              uint8Buffer[offset + 2 * channelSize] = b;
+            } else {
+              final int offset = (ty * inputSize + tx) * 3;
+              uint8Buffer![offset] = r;
+              uint8Buffer[offset + 1] = g;
+              uint8Buffer[offset + 2] = b;
+            }
+          }
+        }
+      }
     } else {
-      final int cols = 5 + numClasses;
-      outputList = List.generate(
-        1,
-        (_) => List.generate(
-          numDetections,
-          (_) => List<double>.filled(cols, 0.0),
-        ),
-      );
+      return [];
     }
 
-    interpreter.run(inputList, outputList);
+    // 2. Set input tensor data (Zero Copy assignment)
+    final inputTensor = interpreter.getInputTensor(0);
+    inputTensor.data = isFloat ? floatBuffer!.buffer.asUint8List() : uint8Buffer!;
 
-    // ── Parse detections ────────────────────────────────────────────────────
+    // 3. Run model
+    interpreter.invoke();
+
+    // 4. Read output tensor directly (Zero Copy view)
+    final outputTensor = interpreter.getOutputTensor(0);
+    final Float32List outputFloats = Float32List.sublistView(outputTensor.data);
+
+    // 5. Parse detections
     final detections = <DetectionResult>[];
 
     if (isYoloV8) {
-      // YOLOv8: output[0] shape = [4+numClasses, numDetections]
-      // row = feature axis (cx/cy/w/h then class probs), col = detection index
-      final features = outputList[0] as List; // length = 4 + numClasses
+      // Shape [1, 4 + numClasses, numDetections]
       for (var i = 0; i < numDetections; i++) {
         var classId  = 0;
-        var bestProb = (features[4] as List<double>)[i];
+        var bestProb = outputFloats[4 * numDetections + i];
         for (var c = 1; c < numClasses; c++) {
-          final p = (features[4 + c] as List<double>)[i];
+          final p = outputFloats[(4 + c) * numDetections + i];
           if (p > bestProb) {
             bestProb = p;
             classId  = c;
@@ -338,50 +519,63 @@ class DetectionService {
 
         if (bestProb < confidenceThreshold) continue;
 
-        final cx = (features[0] as List<double>)[i];
-        final cy = (features[1] as List<double>)[i];
-        final w  = (features[2] as List<double>)[i];
-        final h  = (features[3] as List<double>)[i];
+        final cx = outputFloats[0 * numDetections + i];
+        final cy = outputFloats[1 * numDetections + i];
+        final w  = outputFloats[2 * numDetections + i];
+        final h  = outputFloats[3 * numDetections + i];
+
+        final int origW = (yBytes != null) ? height! : (image != null ? image.width : 640);
+        final int origH = (yBytes != null) ? width! : (image != null ? image.height : 640);
+        final double scale = math.min(inputSize / origW, inputSize / origH);
+        final double padX = (inputSize - origW * scale) / 2;
+        final double padY = (inputSize - origH * scale) / 2;
 
         detections.add(DetectionResult(
           label:      classId < labels.length ? labels[classId] : 'Unknown',
           confidence: bestProb,
-          left:       ((cx - w / 2) / inputSize).clamp(0.0, 1.0),
-          top:        ((cy - h / 2) / inputSize).clamp(0.0, 1.0),
-          right:      ((cx + w / 2) / inputSize).clamp(0.0, 1.0),
-          bottom:     ((cy + h / 2) / inputSize).clamp(0.0, 1.0),
+          left:       ((cx - w / 2 - padX) / (origW * scale)).clamp(0.0, 1.0),
+          top:        ((cy - h / 2 - padY) / (origH * scale)).clamp(0.0, 1.0),
+          right:      ((cx + w / 2 - padX) / (origW * scale)).clamp(0.0, 1.0),
+          bottom:     ((cy + h / 2 - padY) / (origH * scale)).clamp(0.0, 1.0),
           timestamp:  DateTime.now(),
         ));
       }
     } else {
-      // YOLOv5: output[0][i] = [cx, cy, w, h, objectness, c0, c1, ...]
-      final rows = outputList[0] as List<List<double>>;
-      final int requiredCols = 5 + numClasses;
-      for (final row in rows) {
-        if (row.length < requiredCols) continue;
-        final objectness = row[4];
+      // YOLOv5 shape [1, numDetections, 5 + numClasses]
+      final int cols = 5 + numClasses;
+      for (var i = 0; i < numDetections; i++) {
+        final int offset = i * cols;
+        final double objectness = outputFloats[offset + 4];
         if (objectness < confidenceThreshold) continue;
 
         var classId  = 0;
-        var bestProb = row[5];
+        var bestProb = outputFloats[offset + 5];
         for (var c = 1; c < numClasses; c++) {
-          final p = row[5 + c];
+          final p = outputFloats[offset + 5 + c];
           if (p > bestProb) { bestProb = p; classId = c; }
         }
 
         final score = objectness * bestProb;
         if (score < confidenceThreshold) continue;
 
-        final cx = row[0]; final cy = row[1];
-        final w  = row[2]; final h  = row[3];
+        final cx = outputFloats[offset + 0];
+        final cy = outputFloats[offset + 1];
+        final w  = outputFloats[offset + 2];
+        final h  = outputFloats[offset + 3];
+
+        final int origW = (yBytes != null) ? height! : (image != null ? image.width : 640);
+        final int origH = (yBytes != null) ? width! : (image != null ? image.height : 640);
+        final double scale = math.min(inputSize / origW, inputSize / origH);
+        final double padX = (inputSize - origW * scale) / 2;
+        final double padY = (inputSize - origH * scale) / 2;
 
         detections.add(DetectionResult(
           label:      classId < labels.length ? labels[classId] : 'Unknown',
           confidence: score,
-          left:       ((cx - w / 2) / inputSize).clamp(0.0, 1.0),
-          top:        ((cy - h / 2) / inputSize).clamp(0.0, 1.0),
-          right:      ((cx + w / 2) / inputSize).clamp(0.0, 1.0),
-          bottom:     ((cy + h / 2) / inputSize).clamp(0.0, 1.0),
+          left:       ((cx - w / 2 - padX) / (origW * scale)).clamp(0.0, 1.0),
+          top:        ((cy - h / 2 - padY) / (origH * scale)).clamp(0.0, 1.0),
+          right:      ((cx + w / 2 - padX) / (origW * scale)).clamp(0.0, 1.0),
+          bottom:     ((cy + h / 2 - padY) / (origH * scale)).clamp(0.0, 1.0),
           timestamp:  DateTime.now(),
         ));
       }
@@ -420,10 +614,8 @@ class DetectionService {
   void dispose() {
     _workerSendPort?.send('dispose');
     _workerIsolate?.kill(priority: Isolate.beforeNextEvent);
-    _interpreter?.close();
     _workerIsolate  = null;
     _workerSendPort = null;
-    _interpreter    = null;
     _isInitialized  = false;
   }
 }
