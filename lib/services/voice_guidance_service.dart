@@ -215,6 +215,62 @@ class VoiceGuidanceService {
     }
   }
 
+  /// Announce early warning for a traffic sign with its distance
+  Future<void> speakEarlyWarning(String signLabel, int distance, {bool isEn = false}) async {
+    if (!_isInitialized) await init();
+
+    print('🎤 [TTS] Request to speak early warning: $signLabel at $distance meters');
+
+    if (_isSpeaking) {
+      await _tts.stop();
+    }
+
+    try {
+      _isSpeaking = true;
+      String message = isEn 
+          ? 'Warning: $signLabel ahead in $distance meters.' 
+          : 'Chú ý: phía trước $distance mét có biển báo $signLabel.';
+      
+      final lower = signLabel.toLowerCase();
+      
+      if (lower.contains('khu vực đông dân cư') && !lower.contains('ngoài')) {
+        message = isEn 
+            ? 'Entering populated area in $distance meters. Speed limit 60.'
+            : 'Phía trước $distance mét bắt đầu khu đông dân cư. Tốc độ tối đa 60 kilômét trên giờ.';
+      } else if (lower.contains('ngoài khu vực đông dân cư')) {
+        message = isEn
+            ? 'Leaving populated area in $distance meters. Speed limit 90.'
+            : 'Phía trước $distance mét hết khu đông dân cư. Tốc độ tối đa 90 kilômét trên giờ.';
+      } else if (lower.contains('tốc độ tối đa') && !lower.contains('hết')) {
+        final match = RegExp(r'\d+').firstMatch(lower);
+        if (match != null) {
+          message = isEn 
+              ? 'Speed limit ${match.group(0)} km/h ahead in $distance meters.'
+              : 'Phía trước $distance mét giới hạn tốc độ ${match.group(0)} kilômét trên giờ.';
+        }
+      } else if (lower.contains('hết tốc độ tối đa')) {
+        message = isEn
+            ? 'End of speed limit in $distance meters.'
+            : 'Phía trước $distance mét hết giới hạn tốc độ.';
+      } else if (lower.contains('yield') || lower.contains('nhường')) {
+        message = isEn
+            ? 'Yield ahead in $distance meters.'
+            : 'Phía trước $distance mét có biển nhường đường.';
+      } else if (lower.contains('stop') || lower.contains('dừng')) {
+        message = isEn
+            ? 'Stop sign ahead in $distance meters.'
+            : 'Phía trước $distance mét có biển dừng lại.';
+      }
+
+      print('🎤 [TTS] Speaking early warning: $message');
+      await _tts.speak(message, focus: Platform.isAndroid);
+      _isSpeaking = false;
+    } catch (e) {
+      print('🎤 [TTS] Error speaking early warning: $e');
+      _isSpeaking = false;
+    }
+  }
+
   /// Stop current speech
   Future<void> stop() async {
     try {

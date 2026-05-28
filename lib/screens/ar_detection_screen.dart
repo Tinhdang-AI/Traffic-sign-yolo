@@ -62,6 +62,15 @@ class _ARDetectionScreenState extends State<ARDetectionScreen>
   // API service
   final _apiService = NestJsApiService();
 
+  // Cooldown cache for auto uploads: label -> _AutoUploadCacheItem
+  final List<_AutoUploadCacheItem> _autoUploadCooldownCache = [];
+
+  // EWS state variables
+  Position? _lastPrefetchPosition;
+  DateTime? _lastPrefetchTime;
+  List<dynamic> _nearbyApprovedSigns = [];
+  final Map<String, DateTime> _warnedSignsCooldown = {};
+
   @override
   void initState() {
     super.initState();
@@ -115,6 +124,7 @@ class _ARDetectionScreenState extends State<ARDetectionScreen>
             _currentPosition = position;
             _currentSpeed = LocationService.instance.currentSpeedKmH;
           });
+          _runEarlyWarningSystem(position);
         }
       });
     }
@@ -173,6 +183,15 @@ class _ARDetectionScreenState extends State<ARDetectionScreen>
           final List<String> labels = stabilized.map((d) => d.label).toList();
           _speakDetectedSigns(labels);
           unawaited(_saveDetectionsToHistory(stabilized));
+
+          // Silent Auto-Upload ngầm khi phát hiện đạt độ tin cậy cao và streak ổn định
+          for (final d in stabilized) {
+            final streak = _labelStreak[d.label] ?? 0;
+            final confidence = _displayConfidence(d.label, d.confidence);
+            if (streak >= 3 && confidence > 0.80) {
+              unawaited(_triggerSilentAutoUpload(d.label, confidence));
+            }
+          }
         }
       }
     } catch (e) {
@@ -200,6 +219,139 @@ class _ARDetectionScreenState extends State<ARDetectionScreen>
     if (signsToSpeak.isNotEmpty) {
       final spokenText = signsToSpeak.map((l) => SignTranslator.translate(l, isEn)).join(isEn ? ' and ' : ' và ');
       VoiceGuidanceService().speakTrafficSign(spokenText, isEn: isEn);
+    }
+  }
+
+  Future<void> _triggerSilentAutoUpload(String label, double confidence) async {
+    if (_currentPosition == null) return;
+    final lat = _currentPosition!.latitude;
+    final lng = _currentPosition!.longitude;
+    final now = DateTime.now();
+
+    // Check cooldown: same label within 20m in the last 5 minutes
+    for (final item in _autoUploadCooldownCache) {
+      if (item.label == label && now.difference(item.timestamp) < const Duration(minutes: 5)) {
+        final dist = Geolocator.distanceBetween(item.latitude, item.longitude, lat, lng);
+        if (dist <= 20.0) {
+          // Blocked by cooldown
+          return;
+        }
+      }
+    }
+
+    // Clean up old items from cache (older than 5 minutes)
+    _autoUploadCooldownCache.removeWhere((item) => now.difference(item.timestamp) >= const Duration(minutes: 5));
+
+    // Add to cooldown cache
+    _autoUploadCooldownCache.add(_AutoUploadCacheItem(
+      label: label,
+      latitude: lat,
+      longitude: lng,
+      timestamp: now,
+    ));
+
+    print('🚀 [Auto-Upload] Sending silent detection: $label (conf: $confidence) at ($lat, $lng)');
+    
+    try {
+      await _apiService.recordDetection(
+        latitude: lat,
+        longitude: lng,
+        confidence: confidence,
+        detectionType: label,
+        description: 'Auto-detected by device (Sentinel EWS)',
+      );
+      print('🚀 [Auto-Upload] Silent detection uploaded successfully: $label');
+    } catch (e) {
+      print('🚀 [Auto-Upload] Silent detection upload failed: $e');
+    }
+  }
+
+  Future<void> _runEarlyWarningSystem(Position position) async {
+    final now = DateTime.now();
+    
+    // 1. Check if we should pre-fetch signs near 1km
+    bool shouldPrefetch = false;
+    if (_lastPrefetchPosition == null || _lastPrefetchTime == null) {
+      shouldPrefetch = true;
+    } else {
+      final distMoved = Geolocator.distanceBetween(
+        _lastPrefetchPosition!.latitude,
+        _lastPrefetchPosition!.longitude,
+        position.latitude,
+        position.longitude,
+      );
+      final timeDiff = now.difference(_lastPrefetchTime!);
+      if (distMoved >= 500.0 || timeDiff >= const Duration(seconds: 30)) {
+        shouldPrefetch = true;
+      }
+    }
+
+    if (shouldPrefetch) {
+      _lastPrefetchPosition = position;
+      _lastPrefetchTime = now;
+      unawaited(_prefetchNearbySigns(position.latitude, position.longitude));
+    }
+
+    // 2. Compute distance to each fetched sign and trigger warning if within 100m (or speed * 5s)
+    if (_nearbyApprovedSigns.isEmpty) return;
+
+    // Speed in m/s
+    final speedMS = position.speed; // speed from geolocator is already in m/s
+    final warningDistance = math.max(100.0, speedMS * 5.0);
+
+    for (final sign in _nearbyApprovedSigns) {
+      final signId = sign['id'] as String? ?? '';
+      if (signId.isEmpty) continue;
+      
+      final signLat = (sign['latitude'] as num?)?.toDouble() ?? 0.0;
+      final signLng = (sign['longitude'] as num?)?.toDouble() ?? 0.0;
+      if (signLat == 0.0 || signLng == 0.0) continue;
+
+      final label = sign['violationType'] as String? ?? 'Sign';
+
+      // Check if sign has warning cooldown
+      final lastWarned = _warnedSignsCooldown[signId];
+      if (lastWarned != null && now.difference(lastWarned) < const Duration(minutes: 5)) {
+        continue; // Cooldown active
+      }
+
+      final distance = Geolocator.distanceBetween(
+        position.latitude,
+        position.longitude,
+        signLat,
+        signLng,
+      );
+
+      if (distance <= warningDistance) {
+        // Trigger Early Warning!
+        _warnedSignsCooldown[signId] = now;
+        print('🔔 [EWS] Triggering early warning for: $label at ${distance.toInt()} meters');
+        
+        if (_isTtsEnabled) {
+          final isEn = context.read<SettingsProvider>().isEnglish;
+          VoiceGuidanceService().speakEarlyWarning(label, distance.toInt(), isEn: isEn);
+        }
+      }
+    }
+  }
+
+  Future<void> _prefetchNearbySigns(double lat, double lng) async {
+    try {
+      print('📡 [EWS] Prefetching nearby signs within 1km around ($lat, $lng)');
+      final res = await _apiService.getNearbyReports(
+        latitude: lat,
+        longitude: lng,
+        radiusKm: 1.0, // 1km radius
+      );
+      final List<dynamic> reportsList = res['reports'] as List? ?? [];
+      if (mounted) {
+        setState(() {
+          _nearbyApprovedSigns = reportsList;
+        });
+        print('📡 [EWS] Prefetched ${reportsList.length} nearby signs.');
+      }
+    } catch (e) {
+      print('📡 [EWS] Prefetch failed: $e');
     }
   }
 
@@ -1167,4 +1319,18 @@ class _ScanningOverlayPainter extends CustomPainter {
   bool shouldRepaint(covariant _ScanningOverlayPainter oldDelegate) {
     return oldDelegate.pulseValue != pulseValue || oldDelegate.isScanning != isScanning;
   }
+}
+
+class _AutoUploadCacheItem {
+  final String label;
+  final double latitude;
+  final double longitude;
+  final DateTime timestamp;
+
+  _AutoUploadCacheItem({
+    required this.label,
+    required this.latitude,
+    required this.longitude,
+    required this.timestamp,
+  });
 }
