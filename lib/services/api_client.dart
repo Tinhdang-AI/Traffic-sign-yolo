@@ -4,7 +4,6 @@ import 'dart:convert';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 class ApiClient {
-  // ⚠️ THAY ĐỔI BASE_URL theo server thực tế
   static const String _baseUrl = 'http://192.168.1.109:3000/api/v1'; // Port 3000 = NestJS backend
   static const String _tokenKey = 'access_token';
   static const String _refreshTokenKey = 'refresh_token';

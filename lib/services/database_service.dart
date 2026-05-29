@@ -85,7 +85,6 @@ class DatabaseService {
   DatabaseService._internal();
 
   static const String dbName = 'sentinel_local.db';
-  static const String pendingReportsTable = 'pending_reports';
   static const String detectionHistoryTable = 'detection_history';
   static const int dbVersion = 4;
 
@@ -107,30 +106,6 @@ class DatabaseService {
   }
 
   Future<void> _onCreate(Database db, int version) async {
-    await db.execute('''
-      CREATE TABLE $pendingReportsTable (
-        id TEXT PRIMARY KEY,
-        latitude REAL NOT NULL,
-        longitude REAL NOT NULL,
-        violationType TEXT NOT NULL,
-        description TEXT NOT NULL,
-        timestamp INTEGER NOT NULL,
-        reportedBy TEXT NOT NULL,
-        imageUrl TEXT,
-        isVerified INTEGER DEFAULT 0,
-        isSynced INTEGER DEFAULT 0,
-        createdAt INTEGER NOT NULL,
-        updatedAt INTEGER NOT NULL
-      )
-    ''');
-
-    await db.execute(
-      'CREATE INDEX idx_synced ON $pendingReportsTable(isSynced)',
-    );
-    await db.execute(
-      'CREATE INDEX idx_timestamp ON $pendingReportsTable(timestamp DESC)',
-    );
-
     await db.execute('''
       CREATE TABLE $detectionHistoryTable (
         id TEXT PRIMARY KEY,
@@ -154,8 +129,7 @@ class DatabaseService {
 
   Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
     if (oldVersion < 2) {
-      await db.execute('DROP TABLE IF EXISTS $pendingReportsTable');
-      await _onCreate(db, newVersion);
+      await db.execute('DROP TABLE IF EXISTS pending_reports');
     }
     if (oldVersion < 3) {
       await db.execute('''
@@ -182,191 +156,6 @@ class DatabaseService {
       await db.execute('ALTER TABLE $detectionHistoryTable ADD COLUMN userId TEXT DEFAULT "guest"');
       await db.execute('CREATE INDEX IF NOT EXISTS idx_history_user ON $detectionHistoryTable(userId)');
     }
-  }
-
-  /// ✅ Insert a pending report into local database
-  Future<void> insertPendingReport({
-    required String id,
-    required double latitude,
-    required double longitude,
-    required String violationType,
-    required String description,
-    required DateTime timestamp,
-    required String reportedBy,
-    required String? imageUrl,
-    required bool isVerified,
-  }) async {
-    final db = await database;
-    final now = DateTime.now().millisecondsSinceEpoch;
-
-    await db.insert(pendingReportsTable, {
-      'id': id,
-      'latitude': latitude,
-      'longitude': longitude,
-      'violationType': violationType,
-      'description': description,
-      'timestamp': timestamp.millisecondsSinceEpoch,
-      'reportedBy': reportedBy,
-      'imageUrl': imageUrl,
-      'isVerified': isVerified ? 1 : 0,
-      'isSynced': 0,
-      'createdAt': now,
-      'updatedAt': now,
-    }, conflictAlgorithm: ConflictAlgorithm.replace);
-    debugPrint('✅ Pending report inserted locally: $id');
-  }
-
-  /// ✅ Get all pending (unsynced) reports
-  Future<List<Map<String, dynamic>>> getPendingReports() async {
-    final db = await database;
-    return await db.query(
-      pendingReportsTable,
-      where: 'isSynced = ?',
-      whereArgs: [0],
-      orderBy: 'timestamp DESC',
-    );
-  }
-
-  /// ✅ Mark reports as synced
-  Future<void> markReportAsSynced(String reportId) async {
-    final db = await database;
-    final now = DateTime.now().millisecondsSinceEpoch;
-
-    await db.update(
-      pendingReportsTable,
-      {'isSynced': 1, 'updatedAt': now},
-      where: 'id = ?',
-      whereArgs: [reportId],
-    );
-    debugPrint('✅ Report marked as synced: $reportId');
-  }
-
-  /// ✅ Mark multiple reports as synced
-  Future<void> markReportsAsSynced(List<String> reportIds) async {
-    final db = await database;
-    final now = DateTime.now().millisecondsSinceEpoch;
-
-    for (final id in reportIds) {
-      await db.update(
-        pendingReportsTable,
-        {'isSynced': 1, 'updatedAt': now},
-        where: 'id = ?',
-        whereArgs: [id],
-      );
-    }
-    debugPrint('✅ ${reportIds.length} reports marked as synced');
-  }
-
-  /// ✅ Increment upvotes for a local report
-  Future<void> incrementReportUpvotes(String reportId) async {
-    final db = await database;
-    final now = DateTime.now().millisecondsSinceEpoch;
-
-    await db.rawUpdate(
-      '''
-      UPDATE $pendingReportsTable
-      SET upvotes = COALESCE(upvotes, 0) + 1,
-          updatedAt = ?
-      WHERE id = ?
-      ''',
-      [now, reportId],
-    );
-    debugPrint('✅ Report upvotes incremented: $reportId');
-  }
-
-  /// ✅ Get all reports (synced and unsynced) near location
-  Future<List<Map<String, dynamic>>> getLocalReportsNearby(
-    double latitude,
-    double longitude, {
-    double radiusKm = 5.0,
-  }) async {
-    final db = await database;
-    final latDelta = radiusKm / 111.0;
-    final lonDelta =
-        radiusKm / (111.0 * (cos(latitude * 3.14159 / 180)).toDouble());
-
-    return await db.query(
-      pendingReportsTable,
-      where:
-          'latitude BETWEEN ? AND ? AND longitude BETWEEN ? AND ? AND isSynced = 1',
-      whereArgs: [
-        latitude - latDelta,
-        latitude + latDelta,
-        longitude - lonDelta,
-        longitude + lonDelta,
-      ],
-      orderBy: 'timestamp DESC',
-    );
-  }
-
-  /// ✅ Get all local reports (cached)
-  Future<List<Map<String, dynamic>>> getAllLocalReports() async {
-    final db = await database;
-    return await db.query(
-      pendingReportsTable,
-      where: 'isSynced = 1',
-      orderBy: 'timestamp DESC',
-    );
-  }
-
-  /// ✅ Delete a report from local cache
-  Future<void> deleteLocalReport(String reportId) async {
-    final db = await database;
-    await db.delete(
-      pendingReportsTable,
-      where: 'id = ?',
-      whereArgs: [reportId],
-    );
-    debugPrint('✅ Local report deleted: $reportId');
-  }
-
-  /// ✅ Update a report's violationType, description, and optionally imageUrl / isVerified in local database
-  Future<void> updateReport({
-    required String id,
-    required String violationType,
-    required String description,
-    required String? imageUrl,
-    bool? isVerified,
-  }) async {
-    final db = await database;
-    final now = DateTime.now().millisecondsSinceEpoch;
-
-    final updateData = <String, dynamic>{
-      'violationType': violationType,
-      'description': description,
-      'imageUrl': imageUrl,
-      'updatedAt': now,
-    };
-
-    if (isVerified != null) {
-      updateData['isVerified'] = isVerified ? 1 : 0;
-    }
-
-    await db.update(
-      pendingReportsTable,
-      updateData,
-      where: 'id = ?',
-      whereArgs: [id],
-    );
-    debugPrint('✅ Report updated in DB: $id');
-  }
-
-  /// ✅ Get count of pending reports
-  Future<int> getPendingReportCount() async {
-    final db = await database;
-    final result = await db.query(
-      pendingReportsTable,
-      where: 'isSynced = ?',
-      whereArgs: [0],
-    );
-    return result.length;
-  }
-
-  /// Clear all local reports (use with caution)
-  Future<void> clearAllLocalReports() async {
-    final db = await database;
-    await db.delete(pendingReportsTable);
-    debugPrint('⚠️ All local reports cleared');
   }
 
   // ─────────────────────────────────────────────
