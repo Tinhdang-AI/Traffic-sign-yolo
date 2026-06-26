@@ -7,10 +7,7 @@
 - **📊 Báo cáo & Thống kê:** Cung cấp biểu đồ trực quan về tần suất, loại biển báo và mật độ phân bố tại các khu vực.
 - **🔒 Quản lý Truy cập:** Hệ thống phân quyền an toàn với JWT Authentication và bảo mật API.
 - **📱 Đa nền tảng:** Giao diện quản trị viên (Admin Dashboard) hoạt động mượt mà trên Web, Desktop và Mobile.
-🖼️ **Hình ảnh & Thiết kế**
-### 📐 **Thiết kế Hệ thống & Giao diện**
-*(Bạn có thể thay thế link ảnh thiết kế Figma hoặc sơ đồ kiến trúc vào đây)*
-![Architecture & Design](https://via.placeholder.com/800x400.png?text=System+Architecture+&+Figma+Design)
+  
 ### 📱 **Giao diện ứng dụng**
 <p align="center">
   <!-- Thay link ảnh thực tế của bạn vào thuộc tính src="" -->
