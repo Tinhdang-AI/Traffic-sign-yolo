@@ -10,11 +10,22 @@
   
 ### 📱 **Giao diện ứng dụng**
 <p align="center">
-  <img src="assets/images/app_ai/1.png" alt="Map View" width="23%" />
-  <img src="assets/images/app_ai/2.png" alt="Map View" width="23%" />
-  <img src="assets/images/app_ai/3.png" alt="Map View" width="23%" />
-  <img src="assets/images/app_ai/4.png" alt="Map View" width="23%" />
+  <img src="assets/images/app_ai/1.png" alt="Map View" width="30%" />
+  <img src="assets/images/app_ai/2.png" alt="Map View" width="30%" />
+  <img src="assets/images/app_ai/3.png" alt="Map View" width="30%" />
+  <img src="assets/images/app_ai/4.png" alt="Map View" width="30%" />
 </p>
+
+### 📱 **Giao diện admin web**
+<p align="center">
+  <img src="assets/images/admin_ai/1.png" alt="Map View" width="30%" />
+  <img src="assets/images/admin_ai/2.png" alt="Map View" width="30%" />
+  <img src="assets/images/admin_ai/3.png" alt="Map View" width="30%" />
+  <img src="assets/images/admin_ai/4.png" alt="Map View" width="30%" />
+  <img src="assets/images/admin_ai/5.png" alt="Map View" width="30%" />
+</p>
+
+
 🛠️ **Công nghệ sử dụng**
 **Frontend (Admin Dashboard):**
 - **Framework:** Flutter
