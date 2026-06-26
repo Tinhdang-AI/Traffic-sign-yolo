@@ -10,10 +10,10 @@
   
 ### 📱 **Giao diện ứng dụng**
 <p align="center">
-  <!-- Thay link ảnh thực tế của bạn vào thuộc tính src="" -->
-  <img src="https://via.placeholder.com/300x600.png?text=Map+View" alt="Map View" width="30%" />
-  <img src="https://via.placeholder.com/300x600.png?text=Dashboard+Charts" alt="Charts" width="30%" />
-  <img src="https://via.placeholder.com/300x600.png?text=Data+Table" alt="Data Table" width="30%" />
+  <img src="assets/images/app_ai/1.png" alt="Map View" width="30%" />
+  <img src="assets/images/app_ai/2.png" alt="Map View" width="30%" />
+  <img src="assets/images/app_ai/3.png" alt="Map View" width="30%" />
+  <img src="assets/images/app_ai/4.png" alt="Map View" width="30%" />
 </p>
 🛠️ **Công nghệ sử dụng**
 **Frontend (Admin Dashboard):**
