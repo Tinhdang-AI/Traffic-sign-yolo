@@ -45,8 +45,8 @@
 ### 1. Khởi chạy Backend (NestJS)
 ```bash
 # Clone repository
-git clone https://github.com/Tinhdang-AI/Traffic-sign-yolo.git
-cd Traffic-sign-yolo/sentinel-backend
+git clone https://github.com/Tinhdang-AI/traffic-backend
+cd traffic-backend
 # Cài đặt dependencies
 npm install
 # Thiết lập biến môi trường
@@ -55,6 +55,7 @@ cp .env.example .env
 # Chạy server ở chế độ dev
 npm run start:dev
 ### 2. Khởi chạy Frontend (Flutter)
+git clone https://github.com/Tinhdang-AI/traffic-admin
 # Di chuyển vào thư mục admin dashboard
 cd ../admin_traffic
 # Cài đặt các package
