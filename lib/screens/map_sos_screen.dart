@@ -26,6 +26,10 @@ class _MapScreenState extends State<MapScreen> {
   bool _isLoading = true;
   HistoryItem? _selectedItem;
 
+  // Cache to optimize database queries on map interactions
+  List<HistoryItem> _historyCache = [];
+  double _currentZoom = 14.0;
+
   @override
   void initState() {
     super.initState();
@@ -41,7 +45,7 @@ class _MapScreenState extends State<MapScreen> {
 
   void _onHistoryChanged() {
     if (mounted) {
-      _loadHistoryMarkers();
+      _loadHistoryMarkers(forceRefresh: true);
     }
   }
 
@@ -54,11 +58,17 @@ class _MapScreenState extends State<MapScreen> {
       debugPrint("Could not get location: $e");
     }
     
-    await _loadHistoryMarkers();
+    try {
+      await _loadHistoryMarkers(forceRefresh: true);
+    } catch (e) {
+      debugPrint("Error loading history markers in _initMap: $e");
+    }
 
-    setState(() {
-      _isLoading = false;
-    });
+    if (mounted) {
+      setState(() {
+        _isLoading = false;
+      });
+    }
   }
 
   Future<BitmapDescriptor> _createCustomMarker(Uint8List bytes, _SignTypeInfo signInfo) async {
@@ -360,74 +370,95 @@ class _MapScreenState extends State<MapScreen> {
     return BitmapDescriptor.defaultMarkerWithHue(signInfo.markerHue);
   }
 
-  Future<void> _loadHistoryMarkers() async {
-    final history = await DatabaseService().getDetectionHistory();
-
-    // ── 1. Build geographic clusters (80 m radius) ──────────────────────────
-    final List<_MapCluster> clusters = [];
-    for (final item in history) {
-      bool added = false;
-      for (final cluster in clusters) {
-        final dist = Geolocator.distanceBetween(
-          item.latitude, item.longitude,
-          cluster.avgLat, cluster.avgLng,
-        );
-        if (dist <= 80.0) {
-          cluster.add(item);
-          added = true;
-          break;
-        }
+  Future<void> _loadHistoryMarkers({bool forceRefresh = false}) async {
+    try {
+      if (forceRefresh || _historyCache.isEmpty) {
+        _historyCache = await DatabaseService().getDetectionHistory();
       }
-      if (!added) clusters.add(_MapCluster(item));
-    }
+      final history = _historyCache;
 
-    // ── 2. Build one Marker per cluster ─────────────────────────────────────
-    final markerFutures = clusters.map((cluster) async {
-      final dominantInfo = _parseSignType(cluster.dominantLabel);
-
-      final BitmapDescriptor icon;
-      if (cluster.count > 1) {
-        // Numbered circle marker
-        icon = await _createClusterMarker(cluster.count, dominantInfo.badgeColor);
+      // Dynamic clustering radius based on current map zoom level
+      double clusterRadius;
+      if (_currentZoom >= 16.5) {
+        clusterRadius = 5.0; // Dissolve clusters completely for very close zoom (show exact locations)
+      } else if (_currentZoom >= 15.0) {
+        clusterRadius = 25.0; // Minimal clustering when zoomed in
+      } else if (_currentZoom >= 13.0) {
+        clusterRadius = 60.0; // Normal clustering at neighborhood level
+      } else if (_currentZoom >= 10.0) {
+        clusterRadius = 200.0; // Larger clustering at city level
       } else {
-        // Single-item: use the existing photo/vector marker
-        final item = cluster.items.first;
-        if (item.imageBytes != null && item.imageBytes!.isNotEmpty) {
-          icon = await _createCustomMarker(item.imageBytes!, dominantInfo);
-        } else {
-          icon = await _createFallbackMarker(dominantInfo, item.label);
-        }
+        clusterRadius = 700.0; // High clustering when zoomed far out
       }
 
-      return Marker(
-        markerId: MarkerId('cluster_${cluster.avgLat}_${cluster.avgLng}'),
-        position: LatLng(cluster.avgLat, cluster.avgLng),
-        icon: icon,
-        zIndexInt: cluster.count,
-        onTap: () {
-          if (cluster.count == 1) {
-            setState(() => _selectedItem = cluster.items.first);
-            _animateTo(cluster.avgLat, cluster.avgLng);
-          } else {
-            _showClusterSheet(cluster);
+      // ── 1. Build geographic clusters (dynamic clusterRadius) ──────────────────────────
+      final List<_MapCluster> clusters = [];
+      for (final item in history) {
+        bool added = false;
+        for (final cluster in clusters) {
+          final dist = Geolocator.distanceBetween(
+            item.latitude, item.longitude,
+            cluster.avgLat, cluster.avgLng,
+          );
+          if (dist <= clusterRadius) {
+            cluster.add(item);
+            added = true;
+            break;
           }
-        },
-      );
-    });
-
-    final newMarkers = await Future.wait(markerFutures);
-
-    if (!mounted) return;
-    setState(() {
-      _markers
-        ..clear()
-        ..addAll(newMarkers);
-      _circles.clear(); // circles no longer used – clustering replaced them
-      if (_selectedItem != null &&
-          !history.any((item) => item.id == _selectedItem!.id)) {
-        _selectedItem = null;
+        }
+        if (!added) clusters.add(_MapCluster(item));
       }
-    });
+
+      // ── 2. Build one Marker per cluster ─────────────────────────────────────
+      final markerFutures = clusters.map((cluster) async {
+        final dominantInfo = _parseSignType(cluster.dominantLabel);
+
+        final BitmapDescriptor icon;
+        if (cluster.count > 1) {
+          // Numbered circle marker
+          icon = await _createClusterMarker(cluster.count, dominantInfo.badgeColor);
+        } else {
+          // Single-item: use the existing photo/vector marker
+          final item = cluster.items.first;
+          if (item.imageBytes != null && item.imageBytes!.isNotEmpty) {
+            icon = await _createCustomMarker(item.imageBytes!, dominantInfo);
+          } else {
+            icon = await _createFallbackMarker(dominantInfo, item.label);
+          }
+        }
+
+        return Marker(
+          markerId: MarkerId('cluster_${cluster.avgLat}_${cluster.avgLng}'),
+          position: LatLng(cluster.avgLat, cluster.avgLng),
+          icon: icon,
+          zIndexInt: cluster.count,
+          onTap: () {
+            if (cluster.count == 1) {
+              setState(() => _selectedItem = cluster.items.first);
+              _animateTo(cluster.avgLat, cluster.avgLng);
+            } else {
+              _showClusterSheet(cluster);
+            }
+          },
+        );
+      });
+
+      final newMarkers = await Future.wait(markerFutures);
+
+      if (!mounted) return;
+      setState(() {
+        _markers
+          ..clear()
+          ..addAll(newMarkers);
+        _circles.clear(); // circles no longer used – clustering replaced them
+        if (_selectedItem != null &&
+            !history.any((item) => item.id == _selectedItem!.id)) {
+          _selectedItem = null;
+        }
+      });
+    } catch (e) {
+      debugPrint("Error loading history markers: $e");
+    }
   }
 
   // ── Cluster marker canvas ─────────────────────────────────────────────────
@@ -622,6 +653,12 @@ class _MapScreenState extends State<MapScreen> {
             compassEnabled: false,
             mapType: MapType.normal,
             onTap: (_) => _closeSelected(),
+            onCameraMove: (position) {
+              _currentZoom = position.zoom;
+            },
+            onCameraIdle: () {
+              _loadHistoryMarkers();
+            },
           ),
           
           // Header Overlay

@@ -31,12 +31,22 @@ class _StatsHistoryScreenState extends State<StatsHistoryScreen> {
   }
 
   Future<void> _loadHistory() async {
-    final history = await DatabaseService().getDetectionHistory();
-    if (mounted) {
-      setState(() {
-        _history = history;
-        _isLoading = false;
-      });
+    try {
+      final history = await DatabaseService().getDetectionHistory();
+      if (mounted) {
+        setState(() {
+          _history = history;
+          _isLoading = false;
+        });
+      }
+    } catch (e) {
+      debugPrint('Error loading history: $e');
+      if (mounted) {
+        setState(() {
+          _history = [];
+          _isLoading = false;
+        });
+      }
     }
   }
 

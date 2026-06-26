@@ -111,7 +111,31 @@ class ApiService {
     }
   }
 
+  /// Lấy bản đồ cộng đồng đã dedup — biển báo gần vị trí người dùng.
+  /// Backend gọi Supabase RPC `get_map_signs_near`:
+  ///   - Lọc trong bán kính [radiusKm] km (mặc định 5km)
+  ///   - Nhiều user quét cùng 1 biển báo (< 10m, cùng label) → chỉ giữ confidence cao nhất
+  ///   - Tối ưu cho mobile: giới hạn [limit] marker (mặc định 500)
+  Future<List<Map<String, dynamic>>> getCommunityMapData({
+    required double lat,
+    required double lng,
+    double radiusKm = 5.0,
+    int limit = 500,
+  }) async {
+    try {
+      final endpoint = '/history/map?lat=$lat&lng=$lng&radius=$radiusKm&limit=$limit';
+      final resp = await get(endpoint);
+      final json = resp as Map<String, dynamic>;
+      final list = json['data'] as List<dynamic>? ?? [];
+      return list.cast<Map<String, dynamic>>();
+    } catch (e) {
+      debugPrint('getCommunityMapData Error: $e');
+      rethrow;
+    }
+  }
+
   dynamic _handleResponse(http.Response response) {
+
     try {
       final body = response.body;
       final decoded = body.isNotEmpty ? jsonDecode(body) : null;

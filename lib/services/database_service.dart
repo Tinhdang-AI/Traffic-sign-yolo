@@ -49,9 +49,9 @@ class HistoryItem {
     return HistoryItem(
       id: map['id'],
       label: map['label'],
-      confidence: map['confidence'],
-      latitude: map['latitude'],
-      longitude: map['longitude'],
+      confidence: (map['confidence'] as num).toDouble(),
+      latitude: (map['latitude'] as num).toDouble(),
+      longitude: (map['longitude'] as num).toDouble(),
       timestamp: DateTime.fromMillisecondsSinceEpoch(map['timestamp']),
       locationName: map['locationName'] ?? '',
       imageBytes: map['imageBytes'],
@@ -61,8 +61,8 @@ class HistoryItem {
 
   String get displayLocationName {
     final trimmed = locationName.trim();
-    if (trimmed.isEmpty || 
-        trimmed.startsWith('Tọa độ') || 
+    if (trimmed.isEmpty ||
+        trimmed.startsWith('Tọa độ') ||
         trimmed.contains('GPS') ||
         RegExp(r'^-?\d+\.\d+$').hasMatch(trimmed) ||
         RegExp(r'^-?\d+\.\d+,\s*-?\d+\.\d+$').hasMatch(trimmed)) {
@@ -153,8 +153,18 @@ class DatabaseService {
       );
     }
     if (oldVersion < 4) {
-      await db.execute('ALTER TABLE $detectionHistoryTable ADD COLUMN userId TEXT DEFAULT "guest"');
-      await db.execute('CREATE INDEX IF NOT EXISTS idx_history_user ON $detectionHistoryTable(userId)');
+      final columns = await db.rawQuery(
+        'PRAGMA table_info($detectionHistoryTable)',
+      );
+      final hasUserId = columns.any((column) => column['name'] == 'userId');
+      if (!hasUserId) {
+        await db.execute(
+          'ALTER TABLE $detectionHistoryTable ADD COLUMN userId TEXT DEFAULT \'guest\'',
+        );
+      }
+      await db.execute(
+        'CREATE INDEX IF NOT EXISTS idx_history_user ON $detectionHistoryTable(userId)',
+      );
     }
   }
 
@@ -174,7 +184,7 @@ class DatabaseService {
     final db = await database;
     final id = const Uuid().v4();
     final userId = AuthService().currentUser?.id ?? 'guest';
-    
+
     final item = HistoryItem(
       id: id,
       label: label,
@@ -192,18 +202,21 @@ class DatabaseService {
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
     debugPrint('Saved detection to history: $label');
-    
+
     // Upload to backend
     try {
       String? imageUrl;
       if (imageBytes != null && imageBytes.isNotEmpty) {
         try {
-          imageUrl = await NestJsApiService().uploadImage(imageBytes, '${id}.jpg');
+          imageUrl = await NestJsApiService().uploadImage(
+            imageBytes,
+            '${id}.jpg',
+          );
         } catch (e) {
           debugPrint('Failed to upload image, continuing without it: $e');
         }
       }
-      
+
       await NestJsApiService().recordDetection(
         latitude: latitude,
         longitude: longitude,
@@ -216,7 +229,7 @@ class DatabaseService {
     } catch (e) {
       debugPrint('Failed to sync detection to backend: $e');
     }
-    
+
     historyChangeNotifier.value++;
   }
 
@@ -224,6 +237,22 @@ class DatabaseService {
   Future<List<HistoryItem>> getDetectionHistory() async {
     final db = await database;
     final userId = AuthService().currentUser?.id ?? 'guest';
+
+    // If user is logged in (not 'guest'), migrate all local 'guest' records to their userId first
+    if (userId != 'guest') {
+      try {
+        await db.update(
+          detectionHistoryTable,
+          {'userId': userId},
+          where: 'userId = ?',
+          whereArgs: ['guest'],
+        );
+        debugPrint('Migrated guest history records to userId: $userId');
+      } catch (e) {
+        debugPrint('Failed to migrate guest history: $e');
+      }
+    }
+
     final maps = await db.query(
       detectionHistoryTable,
       where: 'userId = ?',
@@ -248,11 +277,7 @@ class DatabaseService {
   /// Delete a detection history item
   Future<void> deleteDetectionHistoryItem(String id) async {
     final db = await database;
-    await db.delete(
-      detectionHistoryTable,
-      where: 'id = ?',
-      whereArgs: [id],
-    );
+    await db.delete(detectionHistoryTable, where: 'id = ?', whereArgs: [id]);
     historyChangeNotifier.value++;
   }
 

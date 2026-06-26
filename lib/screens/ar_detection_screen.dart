@@ -38,7 +38,6 @@ class _ARDetectionScreenState extends State<ARDetectionScreen>
   Timer? _detectionTimer;
   List<DetectionResult> _detections = [];
   bool _isProcessing = false;
-  bool _isReporting = false;
   Position? _currentPosition;
   double _currentSpeed = 0.0;
   StreamSubscription<Position>? _positionSubscription;
@@ -64,12 +63,6 @@ class _ARDetectionScreenState extends State<ARDetectionScreen>
 
   // Cooldown cache for auto uploads: label -> _AutoUploadCacheItem
   final List<_AutoUploadCacheItem> _autoUploadCooldownCache = [];
-
-  // EWS state variables
-  Position? _lastPrefetchPosition;
-  DateTime? _lastPrefetchTime;
-  List<dynamic> _nearbyApprovedSigns = [];
-  final Map<String, DateTime> _warnedSignsCooldown = {};
 
   @override
   void initState() {
@@ -124,7 +117,6 @@ class _ARDetectionScreenState extends State<ARDetectionScreen>
             _currentPosition = position;
             _currentSpeed = LocationService.instance.currentSpeedKmH;
           });
-          _runEarlyWarningSystem(position);
         }
       });
     }
@@ -210,7 +202,7 @@ class _ARDetectionScreenState extends State<ARDetectionScreen>
 
     for (final label in labels) {
       final lastSpoken = _spokenSignsCooldown[label];
-      if (lastSpoken == null || now.difference(lastSpoken) > const Duration(minutes: 5)) {
+      if (lastSpoken == null || now.difference(lastSpoken) > const Duration(seconds: 15)) {
         _spokenSignsCooldown[label] = now;
         signsToSpeak.add(label);
       }
@@ -266,132 +258,6 @@ class _ARDetectionScreenState extends State<ARDetectionScreen>
     }
   }
 
-  Future<void> _runEarlyWarningSystem(Position position) async {
-    final now = DateTime.now();
-    
-    // 1. Check if we should pre-fetch signs near 1km
-    bool shouldPrefetch = false;
-    if (_lastPrefetchPosition == null || _lastPrefetchTime == null) {
-      shouldPrefetch = true;
-    } else {
-      final distMoved = Geolocator.distanceBetween(
-        _lastPrefetchPosition!.latitude,
-        _lastPrefetchPosition!.longitude,
-        position.latitude,
-        position.longitude,
-      );
-      final timeDiff = now.difference(_lastPrefetchTime!);
-      if (distMoved >= 500.0 || timeDiff >= const Duration(seconds: 30)) {
-        shouldPrefetch = true;
-      }
-    }
-
-    if (shouldPrefetch) {
-      _lastPrefetchPosition = position;
-      _lastPrefetchTime = now;
-      unawaited(_prefetchNearbySigns(position.latitude, position.longitude));
-    }
-
-    // 2. Compute distance to each fetched sign and trigger warning if within 100m (or speed * 5s)
-    if (_nearbyApprovedSigns.isEmpty) return;
-
-    // Speed in m/s
-    final speedMS = position.speed; // speed from geolocator is already in m/s
-    final warningDistance = math.max(100.0, speedMS * 5.0);
-
-    for (final sign in _nearbyApprovedSigns) {
-      final signId = sign['id'] as String? ?? '';
-      if (signId.isEmpty) continue;
-      
-      final signLat = (sign['latitude'] as num?)?.toDouble() ?? 0.0;
-      final signLng = (sign['longitude'] as num?)?.toDouble() ?? 0.0;
-      if (signLat == 0.0 || signLng == 0.0) continue;
-
-      final label = sign['violationType'] as String? ?? 'Sign';
-
-      // Check if sign has warning cooldown
-      final lastWarned = _warnedSignsCooldown[signId];
-      if (lastWarned != null && now.difference(lastWarned) < const Duration(minutes: 5)) {
-        continue; // Cooldown active
-      }
-
-      final distance = Geolocator.distanceBetween(
-        position.latitude,
-        position.longitude,
-        signLat,
-        signLng,
-      );
-
-      if (distance <= warningDistance) {
-        // Trigger Early Warning!
-        _warnedSignsCooldown[signId] = now;
-        print('🔔 [EWS] Triggering early warning for: $label at ${distance.toInt()} meters');
-        
-        if (_isTtsEnabled) {
-          final isEn = context.read<SettingsProvider>().isEnglish;
-          VoiceGuidanceService().speakEarlyWarning(label, distance.toInt(), isEn: isEn);
-        }
-      }
-    }
-  }
-
-  Future<void> _prefetchNearbySigns(double lat, double lng) async {
-    try {
-      print('📡 [EWS] Prefetching nearby signs within 1km around ($lat, $lng)');
-      final res = await _apiService.getNearbyReports(
-        latitude: lat,
-        longitude: lng,
-        radiusKm: 1.0, // 1km radius
-      );
-      final List<dynamic> reportsList = res['reports'] as List? ?? [];
-      if (mounted) {
-        setState(() {
-          _nearbyApprovedSigns = reportsList;
-        });
-        print('📡 [EWS] Prefetched ${reportsList.length} nearby signs.');
-      }
-    } catch (e) {
-      print('📡 [EWS] Prefetch failed: $e');
-    }
-  }
-
-  Future<void> _reportDetection(DetectionResult detection) async {
-    if (_currentPosition == null) {
-      // ApiErrorHandler.showErrorSnackBar(
-      //   context,
-      //   'Location not available',
-      // );
-      return;
-    }
-
-    setState(() => _isReporting = true);
-    try {
-      await _apiService.createReport(
-        name: 'AR Detection - ${detection.label}',
-        latitude: _currentPosition!.latitude,
-        longitude: _currentPosition!.longitude,
-        violationType: _mapDetectionToViolationType(detection.label),
-        description:
-            'Detected via AR Camera with ${(_displayConfidence(detection.label, detection.confidence) * 100).toInt()}% confidence',
-      );
-
-    } finally {
-      if (mounted) {
-        setState(() => _isReporting = false);
-      }
-    }
-  }
-
-  String _mapDetectionToViolationType(String label) {
-    final lower = label.toLowerCase();
-    if (lower.contains('tốc độ')) return 'speed_limit';
-    if (lower.contains('cấm')) return 'prohibition';
-    if (lower.contains('chiều')) return 'direction';
-    if (lower.contains('dừng') || lower.contains('stop')) return 'stop';
-    if (lower.contains('nhường')) return 'yield';
-    return 'other';
-  }
-
 
   Future<void> _saveDetectionsToHistory(List<DetectionResult> detections) async {
     final now = DateTime.now();
@@ -429,7 +295,7 @@ class _ARDetectionScreenState extends State<ARDetectionScreen>
 
     for (final d in detections) {
       final lastSaved = _lastSavedHistory[d.label];
-      if (lastSaved == null || now.difference(lastSaved) > const Duration(minutes: 5)) {
+      if (lastSaved == null || now.difference(lastSaved) > const Duration(seconds: 15)) {
         _lastSavedHistory[d.label] = now;
         
         await DatabaseService().addDetectionHistory(
@@ -661,22 +527,7 @@ class _ARDetectionScreenState extends State<ARDetectionScreen>
             ),
           ),
 
-          // 5.5 Report Detection button (when detection exists)
-          if (_detections.isNotEmpty && !_isReporting)
-            Positioned(
-              left: 16,
-              bottom: 40,
-              child: ElevatedButton.icon(
-                onPressed: () => _reportDetection(_detections.first),
-                icon: Icon(Icons.send, size: 18),
-                label: Text(isEn ? 'Report' : 'Báo cáo'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.red.shade600,
-                  foregroundColor: Colors.white,
-                  padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                ),
-              ),
-            ),
+
 
           // 6. Right toggle cards HUD
           Positioned(
