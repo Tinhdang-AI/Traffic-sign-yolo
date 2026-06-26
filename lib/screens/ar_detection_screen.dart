@@ -1,6 +1,5 @@
 import 'dart:math' as math;
 import 'dart:async';
-import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:camera/camera.dart';
@@ -15,8 +14,6 @@ import '../widgets/traffic_sign_icon.dart';
 import '../widgets/confidence_badge.dart';
 import '../services/database_service.dart';
 import '../core/utils/sign_translator.dart';
-import '../services/traffic_rule_engine.dart';
-import '../services/hybrid_speed_limit_service.dart';
 import 'package:provider/provider.dart';
 import '../controllers/settings_provider.dart';
 
@@ -33,7 +30,7 @@ class _ARDetectionScreenState extends State<ARDetectionScreen>
   late final AnimationController _waveCtrl;
   late final Animation<double> _pulse;
 
-  static const int _stableFrameThreshold = 0;
+  static const int _stableFrameThreshold = 2;
   static const double _stableConfidenceThreshold = 0.65;
   static const double _confidenceSmoothingFactor = 0.50;
 
@@ -41,7 +38,6 @@ class _ARDetectionScreenState extends State<ARDetectionScreen>
   Timer? _detectionTimer;
   List<DetectionResult> _detections = [];
   bool _isProcessing = false;
-  bool _isReporting = false;
   Position? _currentPosition;
   double _currentSpeed = 0.0;
   StreamSubscription<Position>? _positionSubscription;
@@ -54,9 +50,7 @@ class _ARDetectionScreenState extends State<ARDetectionScreen>
   // Continuous Scan switch
   bool _isScanContinuous = true;
 
-  StreamSubscription<int?>? _hybridSubscription;
 
-  String? _activeSpeedLimit;
 
   // TTS Cooldowns per label to prevent spamming
   final Map<String, DateTime> _spokenSignsCooldown = {};
@@ -66,6 +60,9 @@ class _ARDetectionScreenState extends State<ARDetectionScreen>
 
   // API service
   final _apiService = NestJsApiService();
+
+  // Cooldown cache for auto uploads: label -> _AutoUploadCacheItem
+  final List<_AutoUploadCacheItem> _autoUploadCooldownCache = [];
 
   @override
   void initState() {
@@ -88,15 +85,6 @@ class _ARDetectionScreenState extends State<ARDetectionScreen>
   }
 
   Future<void> _initParams() async {
-    HybridSpeedLimitService.instance.initialize();
-    _hybridSubscription = HybridSpeedLimitService.instance.hybridSpeedStream.listen((speed) {
-      if (mounted) {
-        setState(() {
-          _activeSpeedLimit = speed?.toString();
-        });
-      }
-    });
-
     await _initLocation();
     await _initCameraAndModel();
   }
@@ -130,7 +118,6 @@ class _ARDetectionScreenState extends State<ARDetectionScreen>
             _currentSpeed = LocationService.instance.currentSpeedKmH;
           });
         }
-        HybridSpeedLimitService.instance.updateLocation(position);
       });
     }
   }
@@ -149,7 +136,7 @@ class _ARDetectionScreenState extends State<ARDetectionScreen>
 
       _cameraController = CameraController(
         cameras[0],
-        ResolutionPreset.medium,
+        ResolutionPreset.high,
         enableAudio: false,
         imageFormatGroup: ImageFormatGroup.jpeg,
       );
@@ -177,10 +164,7 @@ class _ARDetectionScreenState extends State<ARDetectionScreen>
 
     _isProcessing = true;
     try {
-      // Extract JPEG bytes from stream (since ImageFormatGroup.jpeg is used)
-      final bytes = image.planes[0].bytes;
-
-      final results = await DetectionService.instance.detect(bytes);
+      final results = await DetectionService.instance.detect(cameraImage: image);
       if (mounted) {
         final stabilized = _stabilizeDetections(results);
         setState(() {
@@ -188,17 +172,18 @@ class _ARDetectionScreenState extends State<ARDetectionScreen>
         });
 
         if (stabilized.isNotEmpty) {
-          // 1. Update speed limit based on all detected signs via Rule Engine
-          for (final d in stabilized) {
-            TrafficRuleEngine.instance.processDetection(d.label);
-          }
-
-          // 2. Speak all new stable warnings
           final List<String> labels = stabilized.map((d) => d.label).toList();
           _speakDetectedSigns(labels);
-
-          // 3. Save all new stable warnings to SQLite History Database
           unawaited(_saveDetectionsToHistory(stabilized));
+
+          // Silent Auto-Upload ngầm khi phát hiện đạt độ tin cậy cao và streak ổn định
+          for (final d in stabilized) {
+            final streak = _labelStreak[d.label] ?? 0;
+            final confidence = _displayConfidence(d.label, d.confidence);
+            if (streak >= 3 && confidence > 0.80) {
+              unawaited(_triggerSilentAutoUpload(d.label, confidence));
+            }
+          }
         }
       }
     } catch (e) {
@@ -217,7 +202,7 @@ class _ARDetectionScreenState extends State<ARDetectionScreen>
 
     for (final label in labels) {
       final lastSpoken = _spokenSignsCooldown[label];
-      if (lastSpoken == null || now.difference(lastSpoken) > const Duration(minutes: 5)) {
+      if (lastSpoken == null || now.difference(lastSpoken) > const Duration(seconds: 15)) {
         _spokenSignsCooldown[label] = now;
         signsToSpeak.add(label);
       }
@@ -229,41 +214,48 @@ class _ARDetectionScreenState extends State<ARDetectionScreen>
     }
   }
 
-  Future<void> _reportDetection(DetectionResult detection) async {
-    if (_currentPosition == null) {
-      // ApiErrorHandler.showErrorSnackBar(
-      //   context,
-      //   'Location not available',
-      // );
-      return;
-    }
+  Future<void> _triggerSilentAutoUpload(String label, double confidence) async {
+    if (_currentPosition == null) return;
+    final lat = _currentPosition!.latitude;
+    final lng = _currentPosition!.longitude;
+    final now = DateTime.now();
 
-    setState(() => _isReporting = true);
-    try {
-      await _apiService.createReport(
-        name: 'AR Detection - ${detection.label}',
-        latitude: _currentPosition!.latitude,
-        longitude: _currentPosition!.longitude,
-        violationType: _mapDetectionToViolationType(detection.label),
-        description:
-            'Detected via AR Camera with ${(_displayConfidence(detection.label, detection.confidence) * 100).toInt()}% confidence',
-      );
-
-    } finally {
-      if (mounted) {
-        setState(() => _isReporting = false);
+    // Check cooldown: same label within 20m in the last 5 minutes
+    for (final item in _autoUploadCooldownCache) {
+      if (item.label == label && now.difference(item.timestamp) < const Duration(minutes: 5)) {
+        final dist = Geolocator.distanceBetween(item.latitude, item.longitude, lat, lng);
+        if (dist <= 20.0) {
+          // Blocked by cooldown
+          return;
+        }
       }
     }
-  }
 
-  String _mapDetectionToViolationType(String label) {
-    final lower = label.toLowerCase();
-    if (lower.contains('tốc độ')) return 'speed_limit';
-    if (lower.contains('cấm')) return 'prohibition';
-    if (lower.contains('chiều')) return 'direction';
-    if (lower.contains('dừng') || lower.contains('stop')) return 'stop';
-    if (lower.contains('nhường')) return 'yield';
-    return 'other';
+    // Clean up old items from cache (older than 5 minutes)
+    _autoUploadCooldownCache.removeWhere((item) => now.difference(item.timestamp) >= const Duration(minutes: 5));
+
+    // Add to cooldown cache
+    _autoUploadCooldownCache.add(_AutoUploadCacheItem(
+      label: label,
+      latitude: lat,
+      longitude: lng,
+      timestamp: now,
+    ));
+
+    print('🚀 [Auto-Upload] Sending silent detection: $label (conf: $confidence) at ($lat, $lng)');
+    
+    try {
+      await _apiService.recordDetection(
+        latitude: lat,
+        longitude: lng,
+        confidence: confidence,
+        detectionType: label,
+        description: 'Auto-detected by device (Sentinel EWS)',
+      );
+      print('🚀 [Auto-Upload] Silent detection uploaded successfully: $label');
+    } catch (e) {
+      print('🚀 [Auto-Upload] Silent detection upload failed: $e');
+    }
   }
 
 
@@ -303,7 +295,7 @@ class _ARDetectionScreenState extends State<ARDetectionScreen>
 
     for (final d in detections) {
       final lastSaved = _lastSavedHistory[d.label];
-      if (lastSaved == null || now.difference(lastSaved) > const Duration(minutes: 5)) {
+      if (lastSaved == null || now.difference(lastSaved) > const Duration(seconds: 15)) {
         _lastSavedHistory[d.label] = now;
         
         await DatabaseService().addDetectionHistory(
@@ -371,11 +363,12 @@ class _ARDetectionScreenState extends State<ARDetectionScreen>
 
   @override
   void dispose() {
-    _hybridSubscription?.cancel();
-    HybridSpeedLimitService.instance.dispose();
+    _detectionTimer?.cancel();
+
     _positionSubscription?.cancel();
     LocationService.instance.stopTracking();
     _cameraController?.dispose();
+    DetectionService.instance.dispose();
     _pulseCtrl.dispose();
     _waveCtrl.dispose();
     super.dispose();
@@ -448,10 +441,35 @@ class _ARDetectionScreenState extends State<ARDetectionScreen>
 
           // 2. Dynamic Target bounding boxes
           if (_isScanContinuous) ..._detections.map((d) {
-            final left = d.left * size.width;
-            final topBox = d.top * size.height;
-            final boxWidth = d.width * size.width;
-            final boxHeight = d.height * size.height;
+            double left = d.left * size.width;
+            double topBox = d.top * size.height;
+            double boxWidth = d.width * size.width;
+            double boxHeight = d.height * size.height;
+
+            if (_cameraController != null &&
+                _cameraController!.value.isInitialized &&
+                _cameraController!.value.previewSize != null) {
+              final previewSize = _cameraController!.value.previewSize!;
+              // Rotated dimensions for portrait orientation
+              final previewW = previewSize.height;
+              final previewH = previewSize.width;
+
+              final screenW = size.width;
+              final screenH = size.height;
+
+              final scale = math.max(screenW / previewW, screenH / previewH);
+              final scaledW = previewW * scale;
+              final scaledH = previewH * scale;
+
+              final dx = (screenW - scaledW) / 2;
+              final dy = (screenH - scaledH) / 2;
+
+              left = d.left * scaledW + dx;
+              topBox = d.top * scaledH + dy;
+              boxWidth = d.width * scaledW;
+              boxHeight = d.height * scaledH;
+            }
+
             return Positioned(
               left: left,
               top: topBox,
@@ -471,23 +489,31 @@ class _ARDetectionScreenState extends State<ARDetectionScreen>
           // 3. Floating Header (Title & GPS status)
           _buildHeader(top, isEn),
 
-          // 4. Warning alerts at top center (displays all stabilized warnings)
+          // 4. Warning alerts at top center (displays unique stabilized warnings)
           if (_isScanContinuous && _detections.isNotEmpty)
             Positioned(
               top: top + kToolbarHeight + 16,
               left: 16,
               right: 16,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: _detections.take(3).map((d) {
-                  return Padding(
-                    padding: const EdgeInsets.only(bottom: 8.0),
-                    child: _AlertWarning(
-                      label: d.label,
-                      confidence: _displayConfidence(d.label, d.confidence),
-                    ),
+              child: Builder(
+                builder: (context) {
+                  final uniqueDetections = <String, DetectionResult>{};
+                  for (final d in _detections) {
+                    uniqueDetections.putIfAbsent(d.label, () => d);
+                  }
+                  return Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: uniqueDetections.values.take(3).map((d) {
+                      return Padding(
+                        padding: const EdgeInsets.only(bottom: 8.0),
+                        child: _AlertWarning(
+                          label: d.label,
+                          confidence: _displayConfidence(d.label, d.confidence),
+                        ),
+                      );
+                    }).toList(),
                   );
-                }).toList(),
+                },
               ),
             ),
 
@@ -497,26 +523,11 @@ class _ARDetectionScreenState extends State<ARDetectionScreen>
             bottom: 120,
             child: _SpeedHUD(
               speed: _currentSpeed,
-              speedLimit: _activeSpeedLimit,
+              speedLimit: null,
             ),
           ),
 
-          // 5.5 Report Detection button (when detection exists)
-          if (_detections.isNotEmpty && !_isReporting)
-            Positioned(
-              left: 16,
-              bottom: 40,
-              child: ElevatedButton.icon(
-                onPressed: () => _reportDetection(_detections.first),
-                icon: Icon(Icons.send, size: 18),
-                label: Text(isEn ? 'Report' : 'Báo cáo'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.red.shade600,
-                  foregroundColor: Colors.white,
-                  padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                ),
-              ),
-            ),
+
 
           // 6. Right toggle cards HUD
           Positioned(
@@ -1159,4 +1170,18 @@ class _ScanningOverlayPainter extends CustomPainter {
   bool shouldRepaint(covariant _ScanningOverlayPainter oldDelegate) {
     return oldDelegate.pulseValue != pulseValue || oldDelegate.isScanning != isScanning;
   }
+}
+
+class _AutoUploadCacheItem {
+  final String label;
+  final double latitude;
+  final double longitude;
+  final DateTime timestamp;
+
+  _AutoUploadCacheItem({
+    required this.label,
+    required this.latitude,
+    required this.longitude,
+    required this.timestamp,
+  });
 }

@@ -87,74 +87,6 @@ class NestJsApiService {
     }
   }
 
-  Future<Map<String, dynamic>> createReport({
-    required String name,
-    required double latitude,
-    required double longitude,
-    required String violationType,
-    required String description,
-    String? imageUrl,
-  }) async {
-    try {
-      return await _apiService.post('/reports', {
-        'name': name,
-        'latitude': latitude,
-        'longitude': longitude,
-        'violationType': violationType,
-        'description': description,
-        if (imageUrl != null) 'imageUrl': imageUrl,
-      });
-    } catch (e) {
-      debugPrint('Create report error: $e');
-      rethrow;
-    }
-  }
-
-  Future<List<dynamic>> getAllReports({int limit = 50, int offset = 0}) async {
-    try {
-      final response = await _apiService.get(
-        '/reports?limit=$limit&offset=$offset',
-      );
-      return response is List ? response : response['reports'] ?? [];
-    } catch (e) {
-      debugPrint('Get all reports error: $e');
-      rethrow;
-    }
-  }
-
-  Future<Map<String, dynamic>> getNearbyReports({
-    required double latitude,
-    required double longitude,
-    double radiusKm = 5,
-  }) async {
-    try {
-      return await _apiService.get(
-        '/reports/nearby?latitude=$latitude&longitude=$longitude&radiusKm=$radiusKm',
-      );
-    } catch (e) {
-      debugPrint('Get nearby reports error: $e');
-      rethrow;
-    }
-  }
-
-  Future<Map<String, dynamic>> upvoteReport(String reportId) async {
-    try {
-      return await _apiService.post('/reports/$reportId/upvote', {});
-    } catch (e) {
-      debugPrint('Upvote report error: $e');
-      rethrow;
-    }
-  }
-
-  Future<void> deleteReport(String reportId) async {
-    try {
-      await _apiService.delete('/reports/$reportId');
-    } catch (e) {
-      debugPrint('Delete report error: $e');
-      rethrow;
-    }
-  }
-
   Future<Map<String, dynamic>> recordDetection({
     required double latitude,
     required double longitude,
@@ -208,40 +140,6 @@ class NestJsApiService {
       return await _apiService.get('/admin/dashboard/stats');
     } catch (e) {
       debugPrint('Get dashboard stats error: $e');
-      rethrow;
-    }
-  }
-
-  Future<Map<String, dynamic>> getAdminReports({
-    String? status,
-    String? violationType,
-    int limit = 50,
-    int offset = 0,
-  }) async {
-    try {
-      var endpoint = '/admin/reports?limit=$limit&offset=$offset';
-      if (status != null) endpoint += '&status=$status';
-      if (violationType != null) endpoint += '&violationType=$violationType';
-
-      return await _apiService.get(endpoint);
-    } catch (e) {
-      debugPrint('Get admin reports error: $e');
-      rethrow;
-    }
-  }
-
-  Future<Map<String, dynamic>> updateReportStatus({
-    required String reportId,
-    required String status,
-    String? notes,
-  }) async {
-    try {
-      return await _apiService.patch('/admin/reports/$reportId/status', {
-        'status': status,
-        if (notes != null) 'notes': notes,
-      });
-    } catch (e) {
-      debugPrint('Update report status error: $e');
       rethrow;
     }
   }

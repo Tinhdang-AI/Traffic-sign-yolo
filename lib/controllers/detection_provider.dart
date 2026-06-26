@@ -12,7 +12,7 @@ import '../services/database_service.dart';
 
 class DetectionProvider extends ChangeNotifier {
   static const int _stableFrameThreshold = 0;
-  static const double _stableConfidenceThreshold = 0.80;
+  static const double _stableConfidenceThreshold = 0.65;
   static const double _confidenceSmoothingFactor = 0.35;
 
   CameraController? _cameraController;
@@ -142,9 +142,7 @@ class DetectionProvider extends ChangeNotifier {
 
     _isProcessing = true;
     try {
-      final bytes = image.planes[0].bytes;
-
-      final results = await DetectionService.instance.detect(bytes);
+      final results = await DetectionService.instance.detect(cameraImage: image);
       final stabilized = _stabilizeDetections(results);
       _detections = stabilized;
       notifyListeners();
@@ -155,7 +153,7 @@ class DetectionProvider extends ChangeNotifier {
         }
         final List<String> labels = stabilized.map((d) => d.label).toList();
         _speakDetectedSigns(labels);
-        _saveDetectionsToHistory(stabilized, bytes); // unawaited
+        _saveDetectionsToHistory(stabilized, null); // unawaited
       }
     } catch (e) {
       debugPrint('🎤 [Detection] Error processing frame: $e');
@@ -201,7 +199,7 @@ class DetectionProvider extends ChangeNotifier {
     return LocationService.getMockLocationNameStatic(lat, lng);
   }
 
-  Future<void> _saveDetectionsToHistory(List<DetectionResult> detections, Uint8List imageBytes) async {
+  Future<void> _saveDetectionsToHistory(List<DetectionResult> detections, Uint8List? imageBytes) async {
     final now = DateTime.now();
     double lat = 10.7769;
     double lng = 106.7009;

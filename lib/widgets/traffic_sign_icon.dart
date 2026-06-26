@@ -120,13 +120,65 @@ class TrafficSignIcon extends StatelessWidget {
       );
     }
 
+    // ── Kiểm tra kết hợp rẽ + quay đầu TRƯỚC — phải chỏn trước 'quay đầu' riêng lẻ
+    if (l.contains('rẽ') && l.contains('quay đầu')) {
+      // Biển P.102b: Cấm rẽ và quay đầu — hiện 2 icon cạnh nhau
+      final bool isRight = l.contains('phải');
+      return Stack(
+        alignment: Alignment.center,
+        children: [
+          Container(
+            width: size,
+            height: size,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: Colors.white,
+              border: Border.all(color: const Color(0xFFE50000), width: size * 0.13),
+            ),
+          ),
+          // Hiển 2 icon: rẽ + quay đầu, theo đúng hướng phải/trái
+          Positioned(
+            left: size * 0.1,
+            child: Icon(
+              isRight ? Icons.turn_right : Icons.turn_left,
+              size: size * 0.38,
+              color: Colors.black87,
+            ),
+          ),
+          Positioned(
+            right: size * 0.1,
+            child: Icon(
+              isRight ? Icons.u_turn_right : Icons.u_turn_left,
+              size: size * 0.38,
+              color: Colors.black87,
+            ),
+          ),
+          // Gạch chéo đỏ
+          Transform.rotate(
+            angle: -0.785398,
+            child: Container(
+              width: size * 0.1,
+              height: size * 0.8,
+              color: const Color(0xFFE50000),
+            ),
+          ),
+        ],
+      );
+    }
+
     IconData? iconData;
-    if (l.contains('ô tô')) iconData = Icons.directions_car;
-    else if (l.contains('còi')) iconData = Icons.campaign; // Megaphone horn
-    else if (l.contains('quay đầu')) iconData = Icons.u_turn_left;
-    else if (l.contains('rẽ phải')) iconData = Icons.turn_right;
-    else if (l.contains('rẽ trái')) iconData = Icons.turn_left;
-    else if (l.contains('đi thẳng')) iconData = Icons.arrow_upward;
+    if (l.contains('ô tô'))           { iconData = Icons.directions_car; }
+    else if (l.contains('còi'))       { iconData = Icons.campaign; }
+    // Quay đầu xe — chọn hướng đúng (sau khi đã lọc trường hợp kết hợp ở trên)
+    else if (l.contains('quay đầu') && l.contains('phải')) { iconData = Icons.u_turn_right; }
+    else if (l.contains('quay đầu'))  { iconData = Icons.u_turn_left; }
+    // Cấm rẽ phải
+    else if (l.contains('rẽ phải'))   { iconData = Icons.turn_right; }
+    // Cấm rẽ trái
+    else if (l.contains('rẽ trái'))   { iconData = Icons.turn_left; }
+    else if (l.contains('đi thẳng'))  { iconData = Icons.arrow_upward; }
+    // Cấm rẽ (cả hai chiều, không rõ phải/trái)
+    else if (l == 'cấm rẽ')           { iconData = Icons.do_not_touch; }
 
     return Stack(
       alignment: Alignment.center,
@@ -143,7 +195,7 @@ class TrafficSignIcon extends StatelessWidget {
         if (iconData != null)
           Icon(iconData, size: size * 0.45, color: Colors.black),
         Transform.rotate(
-          angle: -0.785398, // -45 degrees (bottom left to top right)
+          angle: -0.785398,
           child: Container(
             width: size * 0.1,
             height: size * 0.8,
@@ -158,7 +210,7 @@ class TrafficSignIcon extends StatelessWidget {
     return Container(
       width: size,
       height: size,
-      decoration: const BoxDecoration(shape: BoxShape.circle, color: const Color(0xFFE50000)),
+      decoration: const BoxDecoration(shape: BoxShape.circle, color: Color(0xFFE50000)),
       alignment: Alignment.center,
       child: Container(width: size * 0.7, height: size * 0.18, color: Colors.white),
     );
@@ -236,7 +288,7 @@ class TrafficSignIcon extends StatelessWidget {
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                   children: [
-                    Container(width: size * 0.08, height: size * 0.08, decoration: const BoxDecoration(shape: BoxShape.circle, color: const Color(0xFFE50000))),
+                    Container(width: size * 0.08, height: size * 0.08, decoration: const BoxDecoration(shape: BoxShape.circle, color: Color(0xFFE50000))),
                     Container(width: size * 0.08, height: size * 0.08, decoration: const BoxDecoration(shape: BoxShape.circle, color: Colors.amber)),
                     Container(width: size * 0.08, height: size * 0.08, decoration: const BoxDecoration(shape: BoxShape.circle, color: Colors.green)),
                   ],
@@ -283,14 +335,26 @@ class TrafficSignIcon extends StatelessWidget {
     }
 
     IconData iconData = Icons.warning_amber_rounded; // Default
-    if (l.contains('người đi bộ')) iconData = Icons.directions_walk;
-    else if (l.contains('trẻ em')) iconData = Icons.directions_run; // Children crossing sign
-    else if (l.contains('công trình')) iconData = Icons.construction;
-    else if (l.contains('giao nhau')) iconData = Icons.close;
-    else if (l.contains('trơn')) iconData = Icons.waves;
-    else if (l.contains('ngoặt')) iconData = Icons.turn_right;
-    else if (l.contains('đường đôi')) iconData = Icons.merge_type;
-    else if (l.contains('hẹp')) iconData = Icons.compress;
+    if (l.contains('người đi bộ'))      { iconData = Icons.directions_walk; }
+    else if (l.contains('trẻ em'))   { iconData = Icons.directions_run; }
+    else if (l.contains('công trình')) { iconData = Icons.construction; }
+    // Giao nhau (intersection) — includes khuất tầm nhìn & giao đường ưu tiên
+    else if (l.contains('giao nhau') || l.contains('khuất tầm nhìn') || l.contains('giao đường ưu tiên')) {
+      iconData = Icons.add;
+    }
+    else if (l.contains('trơn'))      { iconData = Icons.waves; }
+    // Ngoặt — phân biệt trái/phải nếu có
+    else if (l.contains('ngoặt')) {
+      if (l.contains('trái')) { iconData = Icons.turn_left; }
+      else { iconData = Icons.turn_right; }
+    }
+    // Đường đôi / hết đường đôi / hai chiều
+    else if (l.contains('hết đường đôi')) { iconData = Icons.call_merge; }
+    else if (l.contains('đường đôi'))     { iconData = Icons.call_split; }
+    else if (l.contains('hai chiều'))     { iconData = Icons.compare_arrows; }
+    else if (l.contains('hẹp'))          { iconData = Icons.compress; }
+    // Địa điểm tai nạn
+    else if (l.contains('tai nạn'))      { iconData = Icons.personal_injury; }
 
     // The triangle's visual center (centroid) is at ~58% from top.
     // Icon is placed so its center aligns with the triangle centroid.
@@ -405,13 +469,19 @@ class TrafficSignIcon extends StatelessWidget {
         ),
         // Diagonal lines
         ...List.generate(4, (index) {
-          return Transform.rotate(
-            angle: -0.785398, // -45 deg
-            child: Container(
-              margin: EdgeInsets.only(left: index * 6.0 - 9), // spacing them out
-              width: size * 0.04,
-              height: size * 0.8,
-              color: Colors.black87,
+          final double spacing = size * 0.136;
+          final double offset = size * 0.204;
+          final double leftPosition = (size - (size * 0.04)) / 2 + (index * spacing - offset);
+          return Positioned(
+            left: leftPosition,
+            top: size * 0.1,
+            child: Transform.rotate(
+              angle: -0.785398, // -45 deg
+              child: Container(
+                width: size * 0.04,
+                height: size * 0.8,
+                color: Colors.black87,
+              ),
             ),
           );
         }),
@@ -420,15 +490,17 @@ class TrafficSignIcon extends StatelessWidget {
   }
 
   Widget _buildMandatorySign(String l) {
-    IconData iconData = Icons.arrow_upward;
-    if (l.contains('rẽ phải')) iconData = Icons.turn_right;
-    else if (l.contains('rẽ trái')) iconData = Icons.turn_left;
-    else if (l.contains('vòng xuyến')) iconData = Icons.sync;
+    IconData iconData = Icons.arrow_upward; // Mặc định: đi thẳng
+    if (l.contains('rẽ phải'))            { iconData = Icons.turn_right; }
+    else if (l.contains('rẽ trái'))       { iconData = Icons.turn_left; }
+    else if (l.contains('vòng xuyến'))    { iconData = Icons.roundabout_right; }
+    // Biển "hướng phải đi tránh vật cản"
+    else if (l.contains('tránh vật cản')) { iconData = Icons.turn_slight_right; }
 
     return Container(
       width: size,
       height: size,
-      decoration: BoxDecoration(shape: BoxShape.circle, color: const Color(0xFF00539F)),
+      decoration: const BoxDecoration(shape: BoxShape.circle, color: Color(0xFF00539F)),
       alignment: Alignment.center,
       child: Icon(iconData, color: Colors.white, size: size * 0.6),
     );

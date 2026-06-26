@@ -26,6 +26,10 @@ class _MapScreenState extends State<MapScreen> {
   bool _isLoading = true;
   HistoryItem? _selectedItem;
 
+  // Cache to optimize database queries on map interactions
+  List<HistoryItem> _historyCache = [];
+  double _currentZoom = 14.0;
+
   @override
   void initState() {
     super.initState();
@@ -41,24 +45,30 @@ class _MapScreenState extends State<MapScreen> {
 
   void _onHistoryChanged() {
     if (mounted) {
-      _loadHistoryMarkers();
+      _loadHistoryMarkers(forceRefresh: true);
     }
   }
 
   Future<void> _initMap() async {
     try {
       _currentPosition = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.high,
+        locationSettings: const LocationSettings(accuracy: LocationAccuracy.high),
       );
     } catch (e) {
       debugPrint("Could not get location: $e");
     }
     
-    await _loadHistoryMarkers();
+    try {
+      await _loadHistoryMarkers(forceRefresh: true);
+    } catch (e) {
+      debugPrint("Error loading history markers in _initMap: $e");
+    }
 
-    setState(() {
-      _isLoading = false;
-    });
+    if (mounted) {
+      setState(() {
+        _isLoading = false;
+      });
+    }
   }
 
   Future<BitmapDescriptor> _createCustomMarker(Uint8List bytes, _SignTypeInfo signInfo) async {
@@ -84,7 +94,7 @@ class _MapScreenState extends State<MapScreen> {
 
       // Draw shadow for both pin and circle
       final Paint shadowPaint = Paint()
-        ..color = Colors.black.withOpacity(0.35)
+        ..color = Colors.black.withValues(alpha: 0.35)
         ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 5);
 
       final Path shadowPath = Path()
@@ -134,7 +144,7 @@ class _MapScreenState extends State<MapScreen> {
       final ByteData? byteData = await markerImage.toByteData(format: ui.ImageByteFormat.png);
       
       if (byteData != null) {
-        return BitmapDescriptor.fromBytes(byteData.buffer.asUint8List());
+        return BitmapDescriptor.bytes(byteData.buffer.asUint8List());
       }
     } catch (e) {
       debugPrint('Error generating custom marker: $e');
@@ -158,7 +168,7 @@ class _MapScreenState extends State<MapScreen> {
 
       // 1. Vẽ bóng đổ cho ghim
       final Paint shadowPaint = Paint()
-        ..color = Colors.black.withOpacity(0.35)
+        ..color = Colors.black.withValues(alpha: 0.35)
         ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 5);
 
       final Path shadowPath = Path()
@@ -351,7 +361,7 @@ class _MapScreenState extends State<MapScreen> {
       final ByteData? byteData = await markerImage.toByteData(format: ui.ImageByteFormat.png);
       
       if (byteData != null) {
-        return BitmapDescriptor.fromBytes(byteData.buffer.asUint8List());
+        return BitmapDescriptor.bytes(byteData.buffer.asUint8List());
       }
     } catch (e) {
       debugPrint('Error generating custom fallback marker: $e');
@@ -360,91 +370,238 @@ class _MapScreenState extends State<MapScreen> {
     return BitmapDescriptor.defaultMarkerWithHue(signInfo.markerHue);
   }
 
-  Future<void> _loadHistoryMarkers() async {
-    final history = await DatabaseService().getDetectionHistory();
-
-    // Heatmap clustering logic
-    final unvisited = List<HistoryItem>.from(history);
-    final clusters = <_HeatmapCluster>[];
-
-    while (unvisited.isNotEmpty) {
-      final current = unvisited.removeLast();
-      final clusterItems = [current];
-      
-      for (int i = unvisited.length - 1; i >= 0; i--) {
-        final other = unvisited[i];
-        final distance = Geolocator.distanceBetween(
-          current.latitude, current.longitude,
-          other.latitude, other.longitude,
-        );
-        if (distance <= 10.0) {
-          clusterItems.add(other);
-          unvisited.removeAt(i);
-        }
+  Future<void> _loadHistoryMarkers({bool forceRefresh = false}) async {
+    try {
+      if (forceRefresh || _historyCache.isEmpty) {
+        _historyCache = await DatabaseService().getDetectionHistory();
       }
-      clusters.add(_HeatmapCluster(clusterItems));
-    }
+      final history = _historyCache;
 
-    final newCircles = <Circle>{};
-    for (int i = 0; i < clusters.length; i++) {
-      final cluster = clusters[i];
-      if (cluster.items.length >= 3) {
-        final dominantLabel = cluster.dominantLabel;
-        final signInfo = _parseSignType(dominantLabel);
-        
-        newCircles.add(
-          Circle(
-            circleId: CircleId('heat_$i'),
-            center: LatLng(cluster.avgLat, cluster.avgLng),
-            radius: 12.0,
-            fillColor: signInfo.badgeColor.withOpacity(0.4),
-            strokeWidth: 2,
-            strokeColor: signInfo.badgeColor.withOpacity(0.8),
-            zIndex: 1,
-          ),
-        );
-      }
-    }
-
-    // Build all markers in parallel to avoid blocking Google Maps tile threads
-    final markerFutures = history.map((item) async {
-      final signInfo = _parseSignType(item.label);
-
-      final BitmapDescriptor markerIcon;
-      if (item.imageBytes != null && item.imageBytes!.isNotEmpty) {
-        markerIcon = await _createCustomMarker(item.imageBytes!, signInfo);
+      // Dynamic clustering radius based on current map zoom level
+      double clusterRadius;
+      if (_currentZoom >= 16.5) {
+        clusterRadius = 5.0; // Dissolve clusters completely for very close zoom (show exact locations)
+      } else if (_currentZoom >= 15.0) {
+        clusterRadius = 25.0; // Minimal clustering when zoomed in
+      } else if (_currentZoom >= 13.0) {
+        clusterRadius = 60.0; // Normal clustering at neighborhood level
+      } else if (_currentZoom >= 10.0) {
+        clusterRadius = 200.0; // Larger clustering at city level
       } else {
-        markerIcon = await _createFallbackMarker(signInfo, item.label);
+        clusterRadius = 700.0; // High clustering when zoomed far out
       }
 
-      return Marker(
-        markerId: MarkerId(item.id),
-        position: LatLng(item.latitude, item.longitude),
-        icon: markerIcon,
-        onTap: () {
-          setState(() {
-            _selectedItem = item;
-          });
-          _animateTo(item.latitude, item.longitude);
-        },
-      );
-    });
-
-    final newMarkers = await Future.wait(markerFutures);
-
-    if (!mounted) return;
-    setState(() {
-      _markers
-        ..clear()
-        ..addAll(newMarkers);
-      _circles
-        ..clear()
-        ..addAll(newCircles);
-      if (_selectedItem != null &&
-          !history.any((item) => item.id == _selectedItem!.id)) {
-        _selectedItem = null;
+      // ── 1. Build geographic clusters (dynamic clusterRadius) ──────────────────────────
+      final List<_MapCluster> clusters = [];
+      for (final item in history) {
+        bool added = false;
+        for (final cluster in clusters) {
+          final dist = Geolocator.distanceBetween(
+            item.latitude, item.longitude,
+            cluster.avgLat, cluster.avgLng,
+          );
+          if (dist <= clusterRadius) {
+            cluster.add(item);
+            added = true;
+            break;
+          }
+        }
+        if (!added) clusters.add(_MapCluster(item));
       }
-    });
+
+      // ── 2. Build one Marker per cluster ─────────────────────────────────────
+      final markerFutures = clusters.map((cluster) async {
+        final dominantInfo = _parseSignType(cluster.dominantLabel);
+
+        final BitmapDescriptor icon;
+        if (cluster.count > 1) {
+          // Numbered circle marker
+          icon = await _createClusterMarker(cluster.count, dominantInfo.badgeColor);
+        } else {
+          // Single-item: use the existing photo/vector marker
+          final item = cluster.items.first;
+          if (item.imageBytes != null && item.imageBytes!.isNotEmpty) {
+            icon = await _createCustomMarker(item.imageBytes!, dominantInfo);
+          } else {
+            icon = await _createFallbackMarker(dominantInfo, item.label);
+          }
+        }
+
+        return Marker(
+          markerId: MarkerId('cluster_${cluster.avgLat}_${cluster.avgLng}'),
+          position: LatLng(cluster.avgLat, cluster.avgLng),
+          icon: icon,
+          zIndexInt: cluster.count,
+          onTap: () {
+            if (cluster.count == 1) {
+              setState(() => _selectedItem = cluster.items.first);
+              _animateTo(cluster.avgLat, cluster.avgLng);
+            } else {
+              _showClusterSheet(cluster);
+            }
+          },
+        );
+      });
+
+      final newMarkers = await Future.wait(markerFutures);
+
+      if (!mounted) return;
+      setState(() {
+        _markers
+          ..clear()
+          ..addAll(newMarkers);
+        _circles.clear(); // circles no longer used – clustering replaced them
+        if (_selectedItem != null &&
+            !history.any((item) => item.id == _selectedItem!.id)) {
+          _selectedItem = null;
+        }
+      });
+    } catch (e) {
+      debugPrint("Error loading history markers: $e");
+    }
+  }
+
+  // ── Cluster marker canvas ─────────────────────────────────────────────────
+  Future<BitmapDescriptor> _createClusterMarker(int count, Color color) async {
+    const double size = 96.0;
+    final ui.PictureRecorder recorder = ui.PictureRecorder();
+    final Canvas canvas = Canvas(recorder);
+    final double r = size / 2;
+    final Offset center = Offset(r, r);
+
+    // Outer glow ring
+    canvas.drawCircle(
+      center, r,
+      Paint()..color = color.withAlpha(70),
+    );
+    // White border
+    canvas.drawCircle(
+      center, r - 8,
+      Paint()..color = Colors.white,
+    );
+    // Solid fill
+    canvas.drawCircle(
+      center, r - 11,
+      Paint()..color = color,
+    );
+
+    // Count text
+    final String text = count > 99 ? '99+' : '$count';
+    final TextPainter tp = TextPainter(textDirection: TextDirection.ltr)
+      ..text = TextSpan(
+        text: text,
+        style: TextStyle(
+          color: Colors.white,
+          fontSize: count > 9 ? 20 : 24,
+          fontWeight: FontWeight.w800,
+        ),
+      )
+      ..layout();
+    tp.paint(canvas, Offset(r - tp.width / 2, r - tp.height / 2));
+
+    final ui.Image img = await recorder
+        .endRecording()
+        .toImage(size.toInt(), size.toInt());
+    final ByteData? bd = await img.toByteData(format: ui.ImageByteFormat.png);
+    if (bd != null) {
+      return BitmapDescriptor.bytes(bd.buffer.asUint8List());
+    }
+    return BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueBlue);
+  }
+
+  // ── Cluster bottom-sheet ─────────────────────────────────────────────────
+  void _showClusterSheet(_MapCluster cluster) {
+    final isEn = context.read<SettingsProvider>().isEnglish;
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: AppColors.surfaceContainerHighest,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => Column(
+        children: [
+          // Handle bar
+          Container(
+            margin: const EdgeInsets.only(top: 12, bottom: 8),
+            width: 40,
+            height: 4,
+            decoration: BoxDecoration(
+              color: Colors.white24,
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
+            child: Row(
+              children: [
+                const Icon(Icons.layers_rounded, color: AppColors.primary, size: 18),
+                const SizedBox(width: 8),
+                Text(
+                  isEn
+                      ? '${cluster.count} signs at this location'
+                      : '${cluster.count} biển báo tại vị trí này',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 15,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const Divider(color: Colors.white12),
+          Expanded(
+            child: ListView.separated(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              itemCount: cluster.items.length,
+              separatorBuilder: (_, _) => const SizedBox(height: 6),
+              itemBuilder: (ctx, i) {
+                final item = cluster.items[i];
+                final info = _parseSignType(item.label);
+                return ListTile(
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                  tileColor: AppColors.surfaceContainer,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  leading: Container(
+                    width: 40,
+                    height: 40,
+                    decoration: BoxDecoration(
+                      color: info.badgeColor.withAlpha(40),
+                      shape: BoxShape.circle,
+                      border: Border.all(color: info.badgeColor.withAlpha(120)),
+                    ),
+                    child: Icon(info.icon, color: info.badgeColor, size: 20),
+                  ),
+                  title: Text(
+                    item.label.toUpperCase(),
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 13,
+                    ),
+                  ),
+                  subtitle: Text(
+                    item.displayLocationName,
+                    style: const TextStyle(color: AppColors.onSurfaceVariant, fontSize: 11),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  trailing: Text(
+                    '${item.timestamp.hour.toString().padLeft(2, '0')}:${item.timestamp.minute.toString().padLeft(2, '0')}',
+                    style: const TextStyle(color: AppColors.onSurfaceVariant, fontSize: 11),
+                  ),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    setState(() => _selectedItem = item);
+                    _animateTo(item.latitude, item.longitude);
+                  },
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _animateTo(double lat, double lng) async {
@@ -496,6 +653,12 @@ class _MapScreenState extends State<MapScreen> {
             compassEnabled: false,
             mapType: MapType.normal,
             onTap: (_) => _closeSelected(),
+            onCameraMove: (position) {
+              _currentZoom = position.zoom;
+            },
+            onCameraIdle: () {
+              _loadHistoryMarkers();
+            },
           ),
           
           // Header Overlay
@@ -515,8 +678,8 @@ class _MapScreenState extends State<MapScreen> {
                   begin: Alignment.topCenter,
                   end: Alignment.bottomCenter,
                   colors: [
-                    AppColors.background.withOpacity(0.9),
-                    AppColors.background.withOpacity(0.0),
+                    AppColors.background.withValues(alpha: 0.9),
+                    AppColors.background.withValues(alpha: 0.0),
                   ],
                 ),
               ),
@@ -525,9 +688,9 @@ class _MapScreenState extends State<MapScreen> {
                   Container(
                     padding: const EdgeInsets.all(10),
                     decoration: BoxDecoration(
-                      color: AppColors.surfaceContainerHighest.withOpacity(0.8),
+                      color: AppColors.surfaceContainerHighest.withValues(alpha: 0.8),
                       borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: Colors.white.withOpacity(0.1)),
+                      border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
                     ),
                     child: const Icon(Icons.map_outlined, color: AppColors.primary),
                   ),
@@ -566,12 +729,12 @@ class _MapScreenState extends State<MapScreen> {
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
               decoration: BoxDecoration(
-                color: AppColors.surfaceContainerHighest.withOpacity(0.9),
+                color: AppColors.surfaceContainerHighest.withValues(alpha: 0.9),
                 borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: Colors.white.withOpacity(0.1)),
+                border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
                 boxShadow: [
                   BoxShadow(
-                    color: Colors.black.withOpacity(0.3),
+                    color: Colors.black.withValues(alpha: 0.3),
                     blurRadius: 8,
                     offset: const Offset(0, 4),
                   ),
@@ -640,7 +803,7 @@ class _MapScreenState extends State<MapScreen> {
           decoration: BoxDecoration(
             color: color,
             shape: BoxShape.circle,
-            border: Border.all(color: Colors.white.withOpacity(0.5), width: 1),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.5), width: 1),
           ),
         ),
         const SizedBox(width: 8),
@@ -674,12 +837,12 @@ class _MapScreenState extends State<MapScreen> {
       child: Container(
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
-          color: AppColors.surfaceContainerHighest.withOpacity(0.95),
+          color: AppColors.surfaceContainerHighest.withValues(alpha: 0.95),
           borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: Colors.white.withOpacity(0.15)),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.15)),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withOpacity(0.5),
+              color: Colors.black.withValues(alpha: 0.5),
               blurRadius: 20,
               offset: const Offset(0, 10),
             ),
@@ -729,9 +892,9 @@ class _MapScreenState extends State<MapScreen> {
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                     decoration: BoxDecoration(
-                      color: signInfo.badgeColor.withOpacity(0.15),
+                      color: signInfo.badgeColor.withValues(alpha: 0.15),
                       borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: signInfo.badgeColor.withOpacity(0.3)),
+                      border: Border.all(color: signInfo.badgeColor.withValues(alpha: 0.3)),
                     ),
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
@@ -812,28 +975,103 @@ class _SignTypeInfo {
 _SignTypeInfo _parseSignType(String label) {
   final lower = label.toLowerCase();
   
-  if (lower.contains('cấm') || lower.contains('tốc độ tối đa') || lower.contains('hạn chế') || lower.contains('dừng lại')) {
+  // ─── Biển báo cấm (đỏ) ────────────────────────────────────────────────────
+  if (lower.contains('cấm') ||
+      lower.contains('tốc độ tối đa') ||
+      lower.contains('hạn chế') ||
+      lower.contains('dừng lại')) {
+    // STOP bát giác
     if (lower.contains('dừng lại')) {
-      return _SignTypeInfo('Biển báo cấm', 'Hình bát giác, nền đỏ, chữ trắng', AppColors.error, Icons.block, BitmapDescriptor.hueRed);
+      return _SignTypeInfo('Biển dừng lại (STOP)',
+          'Hình bát giác đỏ, chữ STOP trắng — dừng hoàn toàn',
+          AppColors.error, Icons.block, BitmapDescriptor.hueRed);
     }
-    return _SignTypeInfo('Biển báo cấm', 'Hình tròn, viền đỏ, nền trắng', AppColors.error, Icons.remove_circle_outline, BitmapDescriptor.hueRed);
-  } else if (lower.contains('chú ý') || lower.contains('nguy hiểm') || lower.contains('giao nhau')) {
-    return _SignTypeInfo('Biển cảnh báo', 'Hình tam giác đều, viền đỏ, nền vàng', AppColors.secondary, Icons.warning_amber_rounded, BitmapDescriptor.hueYellow);
-  } else if (lower.contains('chỉ được') || lower.contains('tốc độ tối thiểu') || lower.contains('vòng xuyến') || lower.contains('hướng phải đi')) {
-    return _SignTypeInfo('Biển hiệu lệnh', 'Hình tròn, nền xanh, hình trắng', AppColors.primaryContainer, Icons.info_outline, BitmapDescriptor.hueAzure);
-  } else if (lower.contains('hết') || lower.contains('kết thúc')) {
-    return _SignTypeInfo('Hết hiệu lệnh cấm', 'Hình tròn, viền đen, gạch chéo', Colors.grey, Icons.not_interested, BitmapDescriptor.hueViolet);
+    // Cấm rẽ + quay đầu
+    if (lower.contains('rẽ') && lower.contains('quay đầu')) {
+      final dir = lower.contains('phải') ? 'phải' : 'trái';
+      return _SignTypeInfo('Cấm rẽ & quay đầu $dir',
+          'Tròn viền đỏ — cấm rẽ và quay đầu về phía $dir',
+          AppColors.error, Icons.remove_circle_outline, BitmapDescriptor.hueRed);
+    }
+    // Cấm vượt
+    if (lower.contains('vượt')) {
+      return _SignTypeInfo('Biển cấm vượt',
+          'Tròn viền đỏ — 2 xe hơi (đỏ+đen) với gạch chéo đỏ',
+          AppColors.error, Icons.remove_circle_outline, BitmapDescriptor.hueRed);
+    }
+    // Cấm đỗ / dừng
+    if (lower.contains('đỗ') || lower.contains('cấm dừng')) {
+      return _SignTypeInfo('Biển cấm đỗ xe',
+          'Tròn xanh viền đỏ, gạch chéo đỏ',
+          AppColors.error, Icons.local_parking, BitmapDescriptor.hueRed);
+    }
+    // Tốc độ tối đa
+    if (lower.contains('tốc độ tối đa')) {
+      final m = RegExp(r'\d+').firstMatch(lower);
+      final spd = m?.group(0) ?? '';
+      return _SignTypeInfo('Tốc độ tối đa${spd.isNotEmpty ? " $spd km/h" : ""}',
+          'Tròn viền đỏ — số $spd km/h bên trong',
+          AppColors.error, Icons.speed, BitmapDescriptor.hueRed);
+    }
+    // Chiều cao
+    if (lower.contains('chiều cao')) {
+      return _SignTypeInfo('Hạn chế chiều cao',
+          'Tròn viền đỏ — ký hiệu chiều cao tối đa',
+          AppColors.error, Icons.height, BitmapDescriptor.hueRed);
+    }
+    // Cấm ngược chiều
+    if (lower.contains('ngược chiều')) {
+      return _SignTypeInfo('Cấm đi ngược chiều',
+          'Tròn đỏ — thanh ngang trắng (biển P.102)',
+          AppColors.error, Icons.remove_circle_outline, BitmapDescriptor.hueRed);
+    }
+    return _SignTypeInfo('Biển báo cấm', 'Hình tròn viền đỏ, nền trắng, gạch chéo đỏ',
+        AppColors.error, Icons.remove_circle_outline, BitmapDescriptor.hueRed);
+
+  // ─── Biển cảnh báo nguy hiểm (vàng) ──────────────────────────────────────
+  } else if (lower.contains('chú ý')) {
+    return _SignTypeInfo('Biển cảnh báo', 'Hình tam giác đều, viền đỏ, nền vàng',
+        AppColors.secondary, Icons.warning_amber_rounded, BitmapDescriptor.hueYellow);
+
+  // ─── Biển hiệu lệnh & chỉ dẫn (xanh dương) ───────────────────────────────
+  } else if (lower.contains('chỉ được') ||
+      lower.contains('tốc độ tối thiểu') ||
+      lower.contains('vòng xuyến') ||
+      lower.contains('hướng phải đi') ||
+      lower.contains('bắt đầu đường ưu tiên') ||
+      lower.contains('khu vực đông dân cư') ||
+      lower.contains('ngoài khu vực')) {
+    return _SignTypeInfo('Biển hiệu lệnh', 'Hình tròn / chữ nhật, nền xanh',
+        AppColors.primaryContainer, Icons.info_outline, BitmapDescriptor.hueAzure);
+
+  // ─── Hết hiệu lực (xám/tím) ───────────────────────────────────────────────
+  } else if (lower.contains('hết tốc độ') ||
+      lower.contains('hết lệnh cấm') ||
+      lower.contains('kết thúc đường ưu tiên')) {
+    return _SignTypeInfo('Hết hiệu lực', 'Hình tròn, viền đen, gạch chéo',
+        Colors.grey, Icons.not_interested, BitmapDescriptor.hueViolet);
+
+  // ─── Biển chỉ dẫn / thông tin (xanh nhạt) ────────────────────────────────
   } else {
-    return _SignTypeInfo('Biển chỉ dẫn', 'Hình vuông/chữ nhật, nền xanh', AppColors.primary, Icons.map, BitmapDescriptor.hueCyan);
+    return _SignTypeInfo('Biển chỉ dẫn', 'Hình vuông/chữ nhật, nền xanh',
+        AppColors.primary, Icons.map, BitmapDescriptor.hueCyan);
   }
 }
 
-class _HeatmapCluster {
+// ── Geographic cluster for the map ──────────────────────────────────────────
+class _MapCluster {
   final List<HistoryItem> items;
-  _HeatmapCluster(this.items);
 
-  double get avgLat => items.map((e) => e.latitude).reduce((a, b) => a + b) / items.length;
-  double get avgLng => items.map((e) => e.longitude).reduce((a, b) => a + b) / items.length;
+  _MapCluster(HistoryItem first) : items = [first];
+
+  void add(HistoryItem item) => items.add(item);
+
+  int get count => items.length;
+
+  double get avgLat =>
+      items.map((e) => e.latitude).reduce((a, b) => a + b) / items.length;
+  double get avgLng =>
+      items.map((e) => e.longitude).reduce((a, b) => a + b) / items.length;
 
   String get dominantLabel {
     final counts = <String, int>{};
@@ -843,3 +1081,4 @@ class _HeatmapCluster {
     return counts.entries.reduce((a, b) => a.value > b.value ? a : b).key;
   }
 }
+
